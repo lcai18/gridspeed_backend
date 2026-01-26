@@ -2,7 +2,7 @@ from fastapi import FastAPI
 
 from api.supabase.db_api import router as db_api_router
 from api.voice_bot.voice_api import router as voice_api_router
-from api.email_inbound import router as email_inbound_router
+from api.email_agent.email_inbound import router as email_inbound_router
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()

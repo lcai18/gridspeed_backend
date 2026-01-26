@@ -3,9 +3,9 @@ import os
 from fastapi import APIRouter, HTTPException, Request
 from uuid import uuid4
 
-from api.ai import run_ai_agent
-from api.email import send_email
-from api.storage import upload_image
+from api.email_agent.ai import run_ai_agent
+from api.email_agent.email import send_email
+from api.supabase.image_storage import upload_image
 from api.supabase.db_helpers import (
     create_conversation,
     create_message,
