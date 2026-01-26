@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from api.supabase.supabase_client import get_supabase
@@ -78,6 +79,96 @@ def get_user_by_email(email: str) -> dict | None:
         .execute()
     )
     return _maybe_single(response)
+
+
+def create_pending_account(
+    email: str,
+    *,
+    full_name: str | None = None,
+) -> dict:
+    sb = get_supabase()
+    payload = {
+        "email": email,
+        "full_name": full_name,
+        "status": "pending",
+    }
+    response = sb.table("pending_accounts").insert(payload).execute()
+    return _expect_single(response, context="create_pending_account")
+
+
+def get_pending_account(pending_id: str) -> dict | None:
+    sb = get_supabase()
+    response = sb.table("pending_accounts").select("*").eq("id", pending_id).execute()
+    return _maybe_single(response)
+
+
+def get_pending_account_by_email(email: str) -> dict | None:
+    sb = get_supabase()
+    response = (
+        sb.table("pending_accounts")
+        .select("*")
+        .ilike("email", email)
+        .limit(1)
+        .execute()
+    )
+    return _maybe_single(response)
+
+
+def list_pending_accounts(status: str | None = None) -> list[dict]:
+    sb = get_supabase()
+    query = sb.table("pending_accounts").select("*")
+    if status:
+        query = query.eq("status", status)
+    response = query.order("created_at", desc=False).execute()
+    return response.data or []
+
+
+def approve_pending_account(pending_id: str, *, auth_user_id: str) -> dict:
+    sb = get_supabase()
+    payload = {
+        "status": "approved",
+        "auth_user_id": auth_user_id,
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    response = (
+        sb.table("pending_accounts")
+        .update(payload)
+        .eq("id", pending_id)
+        .execute()
+    )
+    return _expect_single(response, context="approve_pending_account")
+
+
+def create_auth_user(email: str) -> dict:
+    sb = get_supabase()
+    response = sb.auth.admin.create_user(
+        {
+            "email": email,
+            "email_confirm": True,
+        }
+    )
+    data = getattr(response, "user", None)
+    if data is None:
+        data = getattr(response, "data", None)
+    if isinstance(data, dict):
+        return data
+    if hasattr(data, "dict"):
+        return data.dict()
+    return data or {}
+
+
+def generate_magic_link(email: str, redirect_to: str | None = None) -> str:
+    sb = get_supabase()
+    payload = {"type": "magiclink", "email": email}
+    if redirect_to:
+        payload["redirect_to"] = redirect_to
+    response = sb.auth.admin.generate_link(payload)
+    data = getattr(response, "data", None) or response
+    if isinstance(data, dict):
+        action_link = data.get("action_link") or data.get("actionLink")
+        if action_link:
+            return action_link
+    raise SupabaseError("No action link returned from generate_link.")
 
 
 def get_default_property_for_tenant(tenant_id: str) -> dict | None:

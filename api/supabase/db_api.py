@@ -3,15 +3,22 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from api.email_agent.email import send_email
 from api.supabase.db_helpers import (
+    approve_pending_account,
     create_conversation,
     create_message,
     create_media_asset,
+    create_pending_account,
     create_property,
     create_tenant,
+    create_auth_user,
     create_unit,
     create_user,
     create_work_order,
+    generate_magic_link,
+    get_pending_account,
+    get_pending_account_by_email,
     get_tenant,
     get_work_order,
     list_conversations,
@@ -19,6 +26,7 @@ from api.supabase.db_helpers import (
     list_media_assets_for_work_order,
     list_messages_for_conversation,
     list_messages_for_work_order,
+    list_pending_accounts,
     list_properties,
     list_units,
     list_users,
@@ -82,6 +90,27 @@ class MediaAssetCreate(BaseModel):
     height: int | None = None
     storage_path: str
     public_url: str | None = None
+
+
+class PendingAccountCreate(BaseModel):
+    email: str
+    full_name: str | None = None
+
+
+class PendingAccountApprove(BaseModel):
+    tenant_id: str
+    full_name: str | None = None
+
+
+class MagicLinkRequest(BaseModel):
+    email: str
+    redirect_to: str | None = None
+
+
+class MagicLinkEmailRequest(BaseModel):
+    email: str
+    redirect_to: str | None = None
+    subject: str | None = None
 
 
 @router.post("/tenants")
@@ -222,3 +251,54 @@ async def list_media_assets_for_work_order_endpoint(work_order_id: str):
 @router.get("/messages/{message_id}/media-assets")
 async def list_media_assets_for_message_endpoint(message_id: str):
     return list_media_assets_for_message(message_id)
+
+
+@router.post("/auth/pending-accounts")
+async def create_pending_account_endpoint(payload: PendingAccountCreate):
+    existing = get_pending_account_by_email(payload.email)
+    if existing:
+        return existing
+    return create_pending_account(payload.email, full_name=payload.full_name)
+
+
+@router.get("/auth/pending-accounts")
+async def list_pending_accounts_endpoint(status: str | None = None):
+    return list_pending_accounts(status=status)
+
+
+@router.post("/auth/pending-accounts/{pending_id}/approve")
+async def approve_pending_account_endpoint(
+    pending_id: str, payload: PendingAccountApprove
+):
+    pending = get_pending_account(pending_id)
+    if pending is None:
+        raise HTTPException(status_code=404, detail="Pending account not found")
+    auth_user = create_auth_user(pending["email"])
+    auth_user_id = auth_user.get("id") if isinstance(auth_user, dict) else None
+    if not auth_user_id:
+        raise HTTPException(status_code=500, detail="Failed to create auth user")
+    db_user = create_user(
+        payload.tenant_id,
+        full_name=payload.full_name or pending.get("full_name"),
+        email=pending["email"],
+    )
+    approve_pending_account(pending_id, auth_user_id=auth_user_id)
+    return {"pending_account": pending, "auth_user": auth_user, "db_user": db_user}
+
+
+@router.post("/auth/magic-link")
+async def magic_link_endpoint(payload: MagicLinkRequest):
+    link = generate_magic_link(payload.email, redirect_to=payload.redirect_to)
+    return {"action_link": link}
+
+
+@router.post("/auth/send-magic-link")
+async def send_magic_link_endpoint(payload: MagicLinkEmailRequest):
+    link = generate_magic_link(payload.email, redirect_to=payload.redirect_to)
+    subject = payload.subject or "Your sign-in link"
+    body = (
+        "Use the link below to sign in. If you did not request this, you can ignore it.\n\n"
+        f"{link}"
+    )
+    send_email(to=payload.email, subject=subject, body=body)
+    return {"status": "sent"}

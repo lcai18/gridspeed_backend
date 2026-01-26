@@ -17,6 +17,17 @@ create table if not exists users (
   created_at timestamptz not null default now()
 );
 
+create table if not exists pending_accounts (
+  id uuid primary key default gen_random_uuid(),
+  email text not null,
+  full_name text,
+  status text not null default 'pending', -- pending | approved | rejected
+  auth_user_id uuid,
+  created_at timestamptz not null default now(),
+  approved_at timestamptz,
+  unique (email)
+);
+
 -- 2) Properties & units
 create table if not exists properties (
   id uuid primary key default gen_random_uuid(),
