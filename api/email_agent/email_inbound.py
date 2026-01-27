@@ -178,7 +178,6 @@ async def inbound_email(request: Request):
                 raise HTTPException(status_code=400, detail="No property configured for tenant")
             property_id = property_record["id"]
             work_order = create_work_order(
-                tenant_id,
                 property_id,
                 reported_by_user_id=user["id"],
                 title=subject,
