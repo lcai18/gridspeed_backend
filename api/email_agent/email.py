@@ -1,7 +1,11 @@
 import os
 from uuid import uuid4
+from dotenv import load_dotenv
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Email, To, Header
+
+load_dotenv()
+
 
 sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
 FROM_EMAIL = os.getenv("FROM_EMAIL")

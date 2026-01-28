@@ -1,10 +1,17 @@
 from __future__ import annotations
-
-from datetime import datetime, timezone
+from dotenv import load_dotenv
+from datetime import datetime, timedelta, timezone
+import base64
+import hashlib
+import hmac
+import json
+import os
+import time
 from typing import Any, Iterable
 
 from api.supabase.supabase_client import get_supabase
 
+load_dotenv()
 
 class SupabaseError(RuntimeError):
     """Raised when Supabase operations fail or return unexpected results."""
@@ -234,6 +241,19 @@ def approve_pending_account(
     return _expect_single(resp, context="approve_pending_account")
 
 
+def get_approved_pending_account_by_email(email: str) -> dict | None:
+    sb = get_supabase()
+    resp = (
+        sb.table("pending_accounts")
+        .select("*")
+        .ilike("email", email)
+        .eq("status", "approved")
+        .limit(1)
+        .execute()
+    )
+    return _maybe_single(resp)
+
+
 # ----------------------------
 # Supabase Auth Admin helpers
 # ----------------------------
@@ -265,14 +285,18 @@ def generate_magic_link(email: str, redirect_to: str | None = None) -> str:
     sb = get_supabase()
     payload = {"type": "magiclink", "email": email}
     if redirect_to:
-        payload["redirect_to"] = redirect_to
+        payload['options'] = {"redirect_to": redirect_to}
     resp = sb.auth.admin.generate_link(payload)
+    
     data = getattr(resp, "data", None) or resp
-    if isinstance(data, dict):
-        action_link = data.get("action_link") or data.get("actionLink")
-        if action_link:
-            return action_link
-    raise SupabaseError("No action link returned from generate_link.")
+    action_link = getattr(getattr(data, "properties", None), "action_link", None)
+    print(action_link)
+    if not action_link:
+        raise SupabaseError(f"No action link returned. resp={resp!r}")
+    return action_link
+
+
+
 
 
 # ----------------------------

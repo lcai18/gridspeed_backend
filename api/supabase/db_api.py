@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from datetime import timedelta, timezone, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -23,6 +24,7 @@ from api.supabase.db_helpers import (
     create_workspace,
     create_work_order,
     generate_magic_link,
+    get_approved_pending_account_by_email,
     get_auth_user_from_access_token,
     get_pending_account,
     get_pending_account_by_email,
@@ -103,6 +105,7 @@ def require_auth(authorization: str | None = Header(default=None)) -> AuthContex
     email = auth_user.get("email")
     if not auth_user_id:
         raise HTTPException(status_code=401, detail="Invalid auth user (no id)")
+
 
     app_user = get_user_by_auth_user_id(auth_user_id)
     if app_user is None:
@@ -509,14 +512,18 @@ async def approve_pending_account_endpoint(
 # Magic links (admin utility or internal)
 # ----------------------------
 
-@router.post("/auth/magic-link")
-async def magic_link_endpoint(payload: MagicLinkRequest):
-    link = generate_magic_link(payload.email, redirect_to=payload.redirect_to)
-    return {"action_link": link}
+def _ensure_approved_account(email: str) -> dict:
+    approved = get_approved_pending_account_by_email(email)
+    if not approved:
+        raise HTTPException(status_code=403, detail="User is not approved")
+    if not approved.get("auth_user_id"):
+        raise HTTPException(status_code=500, detail="Approved account missing auth_user_id")
+    return approved
 
 
 @router.post("/auth/send-magic-link")
 async def send_magic_link_endpoint(payload: MagicLinkEmailRequest):
+    _ensure_approved_account(payload.email)
     link = generate_magic_link(payload.email, redirect_to=payload.redirect_to)
     subject = payload.subject or "Your sign-in link"
     body = (
@@ -524,4 +531,6 @@ async def send_magic_link_endpoint(payload: MagicLinkEmailRequest):
         f"{link}"
     )
     send_email(to=payload.email, subject=subject, body=body)
+
     return {"status": "sent"}
+
