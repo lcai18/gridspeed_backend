@@ -353,6 +353,12 @@ def list_units(property_id: str) -> list[dict]:
     return resp.data or []
 
 
+def get_unit(unit_id: str) -> dict | None:
+    sb = get_supabase()
+    resp = sb.table("units").select("*").eq("id", unit_id).limit(1).execute()
+    return _maybe_single(resp)
+
+
 # ----------------------------
 # Work orders (workspace derived via property)
 # ----------------------------
@@ -421,6 +427,46 @@ def list_work_orders_for_properties(property_ids: Iterable[str]) -> list[dict]:
         .order("created_at", desc=True)
         .execute()
     )
+    return resp.data or []
+
+
+# ----------------------------
+# Occupancies
+# ----------------------------
+
+def create_occupancy(
+    workspace_id: str,
+    *,
+    unit_id: str,
+    user_id: str,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+) -> dict:
+    sb = get_supabase()
+    payload = {
+        "workspace_id": workspace_id,
+        "unit_id": unit_id,
+        "user_id": user_id,
+        "start_at": start_at.isoformat() if isinstance(start_at, datetime) else start_at,
+        "end_at": end_at.isoformat() if isinstance(end_at, datetime) else end_at,
+    }
+    resp = sb.table("occupancies").insert(payload).execute()
+    return _expect_single(resp, context="create_occupancy")
+
+
+def list_occupancies(
+    workspace_id: str,
+    *,
+    unit_id: str | None = None,
+    user_id: str | None = None,
+) -> list[dict]:
+    sb = get_supabase()
+    q = sb.table("occupancies").select("*").eq("workspace_id", workspace_id)
+    if unit_id:
+        q = q.eq("unit_id", unit_id)
+    if user_id:
+        q = q.eq("user_id", user_id)
+    resp = q.order("created_at", desc=False).execute()
     return resp.data or []
 
 
