@@ -430,6 +430,53 @@ def list_work_orders_for_properties(property_ids: Iterable[str]) -> list[dict]:
     return resp.data or []
 
 
+def list_work_orders(workspace_id: str) -> list[dict]:
+    sb = get_supabase()
+    resp = (
+        sb.table("work_orders")
+        .select("*, properties!inner(workspace_id)")
+        .eq("properties.workspace_id", workspace_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    rows = resp.data or []
+    for row in rows:
+        row.pop("properties", None)
+    return rows
+
+
+def list_units_table_rows(workspace_id: str) -> list[dict]:
+    sb = get_supabase()
+    resp = sb.rpc("list_units_table_rows", {"workspace_id": workspace_id}).execute()
+    rows = resp.data or []
+    normalized: list[dict] = []
+    for row in rows:
+        tenant_user = None
+        if row.get("tenant_user_id"):
+            tenant_user = {
+                "id": row.get("tenant_user_id"),
+                "full_name": row.get("tenant_full_name"),
+                "email": row.get("tenant_email"),
+                "phone": row.get("tenant_phone"),
+            }
+        latest_work_orders = row.get("latest_work_orders") or []
+        normalized.append(
+            {
+                "property_id": row.get("property_id"),
+                "property_address": row.get("property_address"),
+                "unit_id": row.get("unit_id"),
+                "unit_label": row.get("unit_label"),
+                "tenant_user": tenant_user,
+                "manager_name": row.get("manager_name"),
+                "maintenance_requests": row.get("maintenance_requests") or "",
+                "last_updated_at": row.get("last_updated_at"),
+                "has_open_request": row.get("has_open_request", False),
+                "latest_work_orders": latest_work_orders,
+            }
+        )
+    return normalized
+
+
 # ----------------------------
 # Occupancies
 # ----------------------------

@@ -114,6 +114,7 @@ create table if not exists occupancies (
 create index if not exists idx_occupancies_unit on occupancies(unit_id);
 create index if not exists idx_occupancies_user on occupancies(user_id);
 create index if not exists idx_occupancies_workspace on occupancies(workspace_id);
+create index if not exists idx_occupancies_unit_end_start on occupancies(unit_id, end_at, start_at);
 
 -- Optional guard: prevent exact duplicate rows (same unit/user/start)
 create unique index if not exists occupancies_unit_user_start_uniq
@@ -225,3 +226,111 @@ create index if not exists idx_media_assets_work_order_created
 
 create index if not exists idx_media_assets_message_created
   on media_assets(message_id, created_at);
+
+-- ------------------------------------------------------------
+-- 7) Dashboard helper (hydrated unit table)
+-- ------------------------------------------------------------
+
+create or replace function list_units_table_rows(workspace_id uuid)
+returns table (
+  property_id uuid,
+  property_address text,
+  unit_id uuid,
+  unit_label text,
+  tenant_user_id uuid,
+  tenant_full_name text,
+  tenant_email text,
+  tenant_phone text,
+  manager_name text,
+  maintenance_requests text,
+  last_updated_at timestamptz,
+  has_open_request boolean,
+  latest_work_orders jsonb
+)
+language sql
+stable
+as $$
+  select
+    p.id as property_id,
+    p.address as property_address,
+    u.id as unit_id,
+    u.unit_label as unit_label,
+    tenant.user_id as tenant_user_id,
+    tenant.full_name as tenant_full_name,
+    tenant.email as tenant_email,
+    tenant.phone as tenant_phone,
+    coalesce(manager_reporter.full_name, default_manager.full_name, 'Unassigned') as manager_name,
+    coalesce(wo_agg.maintenance_requests, '') as maintenance_requests,
+    wo_agg.last_updated_at as last_updated_at,
+    coalesce(wo_agg.has_open_request, false) as has_open_request,
+    wo_agg.latest_work_orders as latest_work_orders
+  from properties p
+  join units u on u.property_id = p.id
+  left join lateral (
+    select o.user_id, usr.full_name, usr.email, usr.phone
+    from occupancies o
+    join users usr on usr.id = o.user_id
+    where o.unit_id = u.id
+    order by (o.end_at is null) desc, o.start_at desc nulls last, o.created_at desc
+    limit 1
+  ) tenant on true
+  left join lateral (
+    with scoped as (
+      select wo.*
+      from work_orders wo
+      where (
+        wo.unit_id = u.id
+        or (
+          wo.unit_id is null
+          and wo.property_id = p.id
+          and not exists (
+            select 1 from work_orders w2 where w2.unit_id = u.id
+          )
+        )
+      )
+    ),
+    ordered as (
+      select * from scoped order by created_at desc
+    ),
+    limited as (
+      select * from ordered limit 3
+    )
+    select
+      max(created_at) as last_updated_at,
+      string_agg(title, ' ; ' order by created_at desc) as maintenance_requests,
+      bool_or(status not in ('done', 'canceled')) as has_open_request,
+      (
+        select jsonb_agg(
+          jsonb_build_object(
+            'id', id,
+            'title', title,
+            'status', status,
+            'updated_at', null,
+            'created_at', created_at,
+            'reported_by_user_id', reported_by_user_id
+          )
+          order by created_at desc
+        )
+        from limited
+      ) as latest_work_orders,
+      (select reported_by_user_id from ordered limit 1) as latest_reported_by_user_id
+    from ordered
+  ) wo_agg on true
+  left join lateral (
+    select u.full_name
+    from users u
+    where u.id = wo_agg.latest_reported_by_user_id
+      and u.role in ('staff', 'pm_admin')
+    limit 1
+  ) manager_reporter on true
+  left join lateral (
+    select u.full_name
+    from users u
+    where u.workspace_id = p.workspace_id
+      and u.role in ('staff', 'pm_admin')
+    order by u.created_at asc
+    limit 1
+  ) default_manager on true
+  where p.workspace_id = workspace_id
+  order by p.created_at asc, u.unit_label asc;
+$$;

@@ -43,9 +43,10 @@ from api.supabase.db_helpers import (
     list_messages_for_work_order,
     list_pending_accounts,
     list_properties,
+    list_units_table_rows,
     list_units,
     list_users,
-    list_work_orders_for_properties,
+    list_work_orders,
     update_work_order,
 )
 
@@ -274,6 +275,35 @@ class MagicLinkEmailRequest(BaseModel):
     subject: str | None = None
 
 
+class TenantUser(BaseModel):
+    id: str
+    full_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+
+
+class WorkOrderSummary(BaseModel):
+    id: str
+    title: str | None = None
+    status: str | None = None
+    updated_at: datetime | None = None
+    created_at: datetime | None = None
+    reported_by_user_id: str | None = None
+
+
+class UnitsTableRow(BaseModel):
+    property_id: str
+    property_address: str | None = None
+    unit_id: str
+    unit_label: str | None = None
+    tenant_user: TenantUser | None = None
+    manager_name: str
+    maintenance_requests: str
+    last_updated_at: datetime | None = None
+    has_open_request: bool | None = None
+    latest_work_orders: list[WorkOrderSummary] | None = None
+
+
 # ----------------------------
 # Auth/session
 # ----------------------------
@@ -309,6 +339,8 @@ async def create_user_endpoint(payload: UserCreate, ctx: AuthContext = Depends(r
 # Properties (workspace-scoped)
 # ----------------------------
 
+# NOTE: The property table UI should use /dashboard/units-table instead of
+# stitching /properties, /occupancies, /properties/{id}/units, and /work-orders.
 @router.get("/properties")
 async def list_properties_endpoint(ctx: AuthContext = Depends(require_auth)):
     return list_properties(ctx.workspace["id"])
@@ -366,14 +398,21 @@ async def create_occupancy_endpoint(payload: OccupancyCreate, ctx: AuthContext =
 
 
 # ----------------------------
+# Dashboard (hydrated table)
+# ----------------------------
+
+@router.get("/dashboard/units-table", response_model=list[UnitsTableRow])
+async def list_units_table_rows_endpoint(ctx: AuthContext = Depends(require_auth)):
+    return list_units_table_rows(ctx.workspace["id"])
+
+
+# ----------------------------
 # Work orders (workspace derived via property)
 # ----------------------------
 
 @router.get("/work-orders")
 async def list_work_orders_endpoint(ctx: AuthContext = Depends(require_auth)):
-    props = list_properties(ctx.workspace["id"])
-    prop_ids = [p["id"] for p in props if p.get("id")]
-    return list_work_orders_for_properties(prop_ids)
+    return list_work_orders(ctx.workspace["id"])
 
 
 @router.post("/work-orders")
