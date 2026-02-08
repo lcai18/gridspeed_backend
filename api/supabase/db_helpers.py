@@ -340,6 +340,20 @@ def list_properties(workspace_id: str) -> list[dict]:
     return resp.data or []
 
 
+def list_property_zip_codes(workspace_id: str) -> list[str]:
+    sb = get_supabase()
+    resp = (
+        sb.table("properties")
+        .select("zip_code")
+        .eq("workspace_id", workspace_id)
+        .not_.is_("zip_code", "null")
+        .execute()
+    )
+    rows = resp.data or []
+    zip_codes = {row.get("zip_code") for row in rows if row.get("zip_code")}
+    return sorted(zip_codes)
+
+
 def create_unit(property_id: str, unit_label: str) -> dict:
     sb = get_supabase()
     resp = (

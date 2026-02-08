@@ -43,6 +43,7 @@ from api.supabase.db_helpers import (
     list_messages_for_work_order,
     list_pending_accounts,
     list_properties,
+    list_property_zip_codes,
     list_units_table_rows,
     list_units,
     list_users,
@@ -346,6 +347,12 @@ async def create_user_endpoint(payload: UserCreate, ctx: AuthContext = Depends(r
 async def list_properties_endpoint(ctx: AuthContext = Depends(require_auth)):
     return list_properties(ctx.workspace["id"])
 
+
+
+
+@router.get("/properties/zip-codes")
+async def list_property_zip_codes_endpoint(ctx: AuthContext = Depends(require_auth)):
+    return list_property_zip_codes(ctx.workspace["id"])
 
 @router.post("/properties")
 async def create_property_endpoint(payload: PropertyCreate, ctx: AuthContext = Depends(require_auth)):
