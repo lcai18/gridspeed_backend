@@ -337,6 +337,7 @@ def list_properties(workspace_id: str) -> list[dict]:
         .order("created_at", desc=False)
         .execute()
     )
+    print(resp.data)
     return resp.data or []
 
 
@@ -487,6 +488,7 @@ def list_units_table_rows(workspace_id: str) -> list[dict]:
             {
                 "property_id": row.get("property_id"),
                 "property_address": row.get("property_address"),
+                "property_zip_code": row.get("property_zip_code"),
                 "unit_id": row.get("unit_id"),
                 "unit_label": row.get("unit_label"),
                 "tenant_user": tenant_user,

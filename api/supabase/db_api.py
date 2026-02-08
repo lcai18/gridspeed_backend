@@ -296,6 +296,7 @@ class WorkOrderSummary(BaseModel):
 class UnitsTableRow(BaseModel):
     property_id: str
     property_address: str | None = None
+    property_zip_code: str | None = None
     unit_id: str
     unit_label: str | None = None
     tenant_user: TenantUser | None = None
