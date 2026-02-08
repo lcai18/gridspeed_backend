@@ -195,6 +195,7 @@ class UserCreate(BaseModel):
 
 class PropertyCreate(BaseModel):
     address: str | None = None
+    zip_code: str | None = None
 
 
 class UnitCreate(BaseModel):
@@ -348,7 +349,11 @@ async def list_properties_endpoint(ctx: AuthContext = Depends(require_auth)):
 
 @router.post("/properties")
 async def create_property_endpoint(payload: PropertyCreate, ctx: AuthContext = Depends(require_auth)):
-    return create_property(ctx.workspace["id"], address=payload.address)
+    return create_property(
+        ctx.workspace["id"],
+        address=payload.address,
+        zip_code=payload.zip_code,
+    )
 
 
 # ----------------------------

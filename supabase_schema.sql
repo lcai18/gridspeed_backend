@@ -76,8 +76,11 @@ create table if not exists properties (
   workspace_id uuid not null references workspaces(id) on delete cascade,
 
   address text,
+  zip_code text,
   created_at timestamptz not null default now()
 );
+
+alter table properties add column if not exists zip_code text;
 
 create index if not exists idx_properties_workspace on properties(workspace_id);
 

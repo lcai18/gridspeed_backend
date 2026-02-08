@@ -303,11 +303,20 @@ def generate_magic_link(email: str, redirect_to: str | None = None) -> str:
 # Properties & units
 # ----------------------------
 
-def create_property(workspace_id: str, *, address: str | None = None) -> dict:
+def create_property(
+    workspace_id: str,
+    *,
+    address: str | None = None,
+    zip_code: str | None = None,
+) -> dict:
     sb = get_supabase()
     resp = (
         sb.table("properties")
-        .insert({"workspace_id": workspace_id, "address": address})
+        .insert({
+            "workspace_id": workspace_id,
+            "address": address,
+            "zip_code": zip_code,
+        })
         .execute()
     )
     return _expect_single(resp, context="create_property")
