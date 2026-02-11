@@ -355,6 +355,81 @@ def list_property_zip_codes(workspace_id: str) -> list[str]:
     return sorted(zip_codes)
 
 
+def delete_work_orders_for_property(property_id: str) -> int:
+    sb = get_supabase()
+    existing = (
+        sb.table("work_orders")
+        .select("id")
+        .eq("property_id", property_id)
+        .execute()
+    )
+    work_order_rows = existing.data or []
+    if not work_order_rows:
+        return 0
+
+    work_order_ids = [row.get("id") for row in work_order_rows if row.get("id")]
+    if not work_order_ids:
+        return 0
+
+    sb.table("work_orders").delete().in_("id", work_order_ids).execute()
+    return len(work_order_ids)
+
+
+def delete_property(property_id: str) -> dict | None:
+    sb = get_supabase()
+    resp = sb.table("properties").delete().eq("id", property_id).execute()
+    return _maybe_single(resp)
+
+
+def list_resident_user_ids_for_property(property_id: str, workspace_id: str) -> list[str]:
+    sb = get_supabase()
+    occ_resp = (
+        sb.table("occupancies")
+        .select("user_id, units!inner(property_id)")
+        .eq("units.property_id", property_id)
+        .execute()
+    )
+    occupancy_rows = occ_resp.data or []
+    candidate_user_ids = sorted({row.get("user_id") for row in occupancy_rows if row.get("user_id")})
+    if not candidate_user_ids:
+        return []
+
+    users_resp = (
+        sb.table("users")
+        .select("id")
+        .eq("workspace_id", workspace_id)
+        .eq("role", "resident")
+        .in_("id", candidate_user_ids)
+        .execute()
+    )
+    resident_user_ids = {row.get("id") for row in (users_resp.data or []) if row.get("id")}
+    if not resident_user_ids:
+        return []
+
+    deletable_user_ids: list[str] = []
+    for user_id in sorted(resident_user_ids):
+        other_occupancy_resp = (
+            sb.table("occupancies")
+            .select("id, units!inner(property_id)")
+            .eq("user_id", user_id)
+            .neq("units.property_id", property_id)
+            .limit(1)
+            .execute()
+        )
+        if not (other_occupancy_resp.data or []):
+            deletable_user_ids.append(user_id)
+    return deletable_user_ids
+
+
+def delete_users_by_ids(user_ids: list[str]) -> int:
+    if not user_ids:
+        return 0
+    sb = get_supabase()
+    resp = sb.table("users").delete().in_("id", user_ids).execute()
+    deleted_rows = resp.data or []
+    return len(deleted_rows)
+
+
 def create_unit(property_id: str, unit_label: str) -> dict:
     sb = get_supabase()
     resp = (

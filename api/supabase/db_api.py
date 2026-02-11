@@ -24,6 +24,10 @@ from api.supabase.db_helpers import (
     create_user,
     create_workspace,
     create_work_order,
+    delete_property,
+    delete_users_by_ids,
+    delete_work_orders_for_property,
+    list_resident_user_ids_for_property,
     generate_magic_link,
     get_unit,
     get_approved_pending_account_by_email,
@@ -362,6 +366,22 @@ async def create_property_endpoint(payload: PropertyCreate, ctx: AuthContext = D
         address=payload.address,
         zip_code=payload.zip_code,
     )
+
+
+@router.delete("/properties/{property_id}")
+async def delete_property_endpoint(property_id: str, ctx: AuthContext = Depends(require_auth)):
+    _ensure_property_in_workspace(ctx, property_id)
+    resident_user_ids = list_resident_user_ids_for_property(property_id, ctx.workspace["id"])
+    deleted_work_orders = delete_work_orders_for_property(property_id)
+    deleted_property = delete_property(property_id)
+    if deleted_property is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    deleted_resident_users = delete_users_by_ids(resident_user_ids)
+    return {
+        "deleted_property": deleted_property,
+        "deleted_work_orders_count": deleted_work_orders,
+        "deleted_resident_users_count": deleted_resident_users,
+    }
 
 
 # ----------------------------
