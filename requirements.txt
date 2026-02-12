@@ -7,4 +7,3 @@ openai
 twilio 
 httpx
 supabase
-geocodio
