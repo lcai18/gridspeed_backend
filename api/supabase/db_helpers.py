@@ -328,6 +328,24 @@ def get_property(property_id: str) -> dict | None:
     return _maybe_single(resp)
 
 
+def update_property(
+    property_id: str,
+    *,
+    address: str | None = None,
+    zip_code: str | None = None,
+) -> dict:
+    payload = {
+        "address": address,
+        "zip_code": zip_code,
+    }
+    updates = {k: v for k, v in payload.items() if v is not None}
+    if not updates:
+        return get_property(property_id) or {}
+    sb = get_supabase()
+    resp = sb.table("properties").update(updates).eq("id", property_id).execute()
+    return _expect_single(resp, context="update_property")
+
+
 def list_properties(workspace_id: str) -> list[dict]:
     sb = get_supabase()
     resp = (
@@ -456,6 +474,18 @@ def get_unit(unit_id: str) -> dict | None:
     sb = get_supabase()
     resp = sb.table("units").select("*").eq("id", unit_id).limit(1).execute()
     return _maybe_single(resp)
+
+
+def update_unit(
+    unit_id: str,
+    *,
+    unit_label: str | None = None,
+) -> dict:
+    if unit_label is None:
+        return get_unit(unit_id) or {}
+    sb = get_supabase()
+    resp = sb.table("units").update({"unit_label": unit_label}).eq("id", unit_id).execute()
+    return _expect_single(resp, context="update_unit")
 
 
 # ----------------------------

@@ -52,6 +52,8 @@ from api.supabase.db_helpers import (
     list_units,
     list_users,
     list_work_orders,
+    update_property,
+    update_unit,
     update_work_order,
 )
 
@@ -205,6 +207,15 @@ class PropertyCreate(BaseModel):
 
 class UnitCreate(BaseModel):
     unit_label: str
+
+
+class PropertyUpdate(BaseModel):
+    address: str | None = None
+    zip_code: str | None = None
+
+
+class UnitUpdate(BaseModel):
+    unit_label: str | None = None
 
 
 class WorkOrderCreate(BaseModel):
@@ -368,6 +379,20 @@ async def create_property_endpoint(payload: PropertyCreate, ctx: AuthContext = D
     )
 
 
+@router.patch("/properties/{property_id}")
+async def update_property_endpoint(
+    property_id: str,
+    payload: PropertyUpdate,
+    ctx: AuthContext = Depends(require_auth),
+):
+    _ensure_property_in_workspace(ctx, property_id)
+    return update_property(
+        property_id,
+        address=payload.address,
+        zip_code=payload.zip_code,
+    )
+
+
 @router.delete("/properties/{property_id}")
 async def delete_property_endpoint(property_id: str, ctx: AuthContext = Depends(require_auth)):
     _ensure_property_in_workspace(ctx, property_id)
@@ -392,6 +417,20 @@ async def delete_property_endpoint(property_id: str, ctx: AuthContext = Depends(
 async def list_units_endpoint(property_id: str, ctx: AuthContext = Depends(require_auth)):
     _ensure_property_in_workspace(ctx, property_id)
     return list_units(property_id)
+
+
+@router.patch("/properties/{property_id}/units/{unit_id}")
+async def update_unit_endpoint(
+    property_id: str,
+    unit_id: str,
+    payload: UnitUpdate,
+    ctx: AuthContext = Depends(require_auth),
+):
+    _ensure_property_in_workspace(ctx, property_id)
+    unit = _ensure_unit_in_workspace(ctx, unit_id)
+    if unit.get("property_id") != property_id:
+        raise HTTPException(status_code=400, detail="Unit does not belong to this property")
+    return update_unit(unit_id, unit_label=payload.unit_label)
 
 
 @router.post("/properties/{property_id}/units")
