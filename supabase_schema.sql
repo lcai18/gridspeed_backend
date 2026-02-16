@@ -334,6 +334,7 @@ create function list_units_table_rows(workspace_id uuid)
 returns table (
   property_id uuid,
   property_address text,
+  property_zip_code text,
   property_updated_at timestamptz,
 
   unit_id uuid,
@@ -357,6 +358,7 @@ as $$
   select
     p.id as property_id,
     p.address as property_address,
+    p.zip_code as property_zip_code,
     p.updated_at as property_updated_at,
 
     u.id as unit_id,
