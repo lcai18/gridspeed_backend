@@ -337,12 +337,12 @@ def update_property(
     payload = {
         "address": address,
         "zip_code": zip_code,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    updates = {k: v for k, v in payload.items() if v is not None}
-    if not updates:
-        return get_property(property_id) or {}
+
+
     sb = get_supabase()
-    resp = sb.table("properties").update(updates).eq("id", property_id).execute()
+    resp = sb.table("properties").update(payload).eq("id", property_id).execute()
     return _expect_single(resp, context="update_property")
 
 
