@@ -303,11 +303,20 @@ def generate_magic_link(email: str, redirect_to: str | None = None) -> str:
 # Properties & units
 # ----------------------------
 
-def create_property(workspace_id: str, *, address: str | None = None) -> dict:
+def create_property(
+    workspace_id: str,
+    *,
+    address: str | None = None,
+    zip_code: str | None = None,
+) -> dict:
     sb = get_supabase()
     resp = (
         sb.table("properties")
-        .insert({"workspace_id": workspace_id, "address": address})
+        .insert({
+            "workspace_id": workspace_id,
+            "address": address,
+            "zip_code": zip_code,
+        })
         .execute()
     )
     return _expect_single(resp, context="create_property")
@@ -319,6 +328,24 @@ def get_property(property_id: str) -> dict | None:
     return _maybe_single(resp)
 
 
+def update_property(
+    property_id: str,
+    *,
+    address: str | None = None,
+    zip_code: str | None = None,
+) -> dict:
+    payload = {
+        "address": address,
+        "zip_code": zip_code,
+    }
+    updates = {k: v for k, v in payload.items() if v is not None}
+    if not updates:
+        return get_property(property_id) or {}
+    sb = get_supabase()
+    resp = sb.table("properties").update(updates).eq("id", property_id).execute()
+    return _expect_single(resp, context="update_property")
+
+
 def list_properties(workspace_id: str) -> list[dict]:
     sb = get_supabase()
     resp = (
@@ -328,7 +355,97 @@ def list_properties(workspace_id: str) -> list[dict]:
         .order("created_at", desc=False)
         .execute()
     )
+    print(resp.data)
     return resp.data or []
+
+
+def list_property_zip_codes(workspace_id: str) -> list[str]:
+    sb = get_supabase()
+    resp = (
+        sb.table("properties")
+        .select("zip_code")
+        .eq("workspace_id", workspace_id)
+        .not_.is_("zip_code", "null")
+        .execute()
+    )
+    rows = resp.data or []
+    zip_codes = {row.get("zip_code") for row in rows if row.get("zip_code")}
+    return sorted(zip_codes)
+
+
+def delete_work_orders_for_property(property_id: str) -> int:
+    sb = get_supabase()
+    existing = (
+        sb.table("work_orders")
+        .select("id")
+        .eq("property_id", property_id)
+        .execute()
+    )
+    work_order_rows = existing.data or []
+    if not work_order_rows:
+        return 0
+
+    work_order_ids = [row.get("id") for row in work_order_rows if row.get("id")]
+    if not work_order_ids:
+        return 0
+
+    sb.table("work_orders").delete().in_("id", work_order_ids).execute()
+    return len(work_order_ids)
+
+
+def delete_property(property_id: str) -> dict | None:
+    sb = get_supabase()
+    resp = sb.table("properties").delete().eq("id", property_id).execute()
+    return _maybe_single(resp)
+
+
+def list_resident_user_ids_for_property(property_id: str, workspace_id: str) -> list[str]:
+    sb = get_supabase()
+    occ_resp = (
+        sb.table("occupancies")
+        .select("user_id, units!inner(property_id)")
+        .eq("units.property_id", property_id)
+        .execute()
+    )
+    occupancy_rows = occ_resp.data or []
+    candidate_user_ids = sorted({row.get("user_id") for row in occupancy_rows if row.get("user_id")})
+    if not candidate_user_ids:
+        return []
+
+    users_resp = (
+        sb.table("users")
+        .select("id")
+        .eq("workspace_id", workspace_id)
+        .eq("role", "resident")
+        .in_("id", candidate_user_ids)
+        .execute()
+    )
+    resident_user_ids = {row.get("id") for row in (users_resp.data or []) if row.get("id")}
+    if not resident_user_ids:
+        return []
+
+    deletable_user_ids: list[str] = []
+    for user_id in sorted(resident_user_ids):
+        other_occupancy_resp = (
+            sb.table("occupancies")
+            .select("id, units!inner(property_id)")
+            .eq("user_id", user_id)
+            .neq("units.property_id", property_id)
+            .limit(1)
+            .execute()
+        )
+        if not (other_occupancy_resp.data or []):
+            deletable_user_ids.append(user_id)
+    return deletable_user_ids
+
+
+def delete_users_by_ids(user_ids: list[str]) -> int:
+    if not user_ids:
+        return 0
+    sb = get_supabase()
+    resp = sb.table("users").delete().in_("id", user_ids).execute()
+    deleted_rows = resp.data or []
+    return len(deleted_rows)
 
 
 def create_unit(property_id: str, unit_label: str) -> dict:
@@ -351,6 +468,24 @@ def list_units(property_id: str) -> list[dict]:
         .execute()
     )
     return resp.data or []
+
+
+def get_unit(unit_id: str) -> dict | None:
+    sb = get_supabase()
+    resp = sb.table("units").select("*").eq("id", unit_id).limit(1).execute()
+    return _maybe_single(resp)
+
+
+def update_unit(
+    unit_id: str,
+    *,
+    unit_label: str | None = None,
+) -> dict:
+    if unit_label is None:
+        return get_unit(unit_id) or {}
+    sb = get_supabase()
+    resp = sb.table("units").update({"unit_label": unit_label}).eq("id", unit_id).execute()
+    return _expect_single(resp, context="update_unit")
 
 
 # ----------------------------
@@ -421,6 +556,94 @@ def list_work_orders_for_properties(property_ids: Iterable[str]) -> list[dict]:
         .order("created_at", desc=True)
         .execute()
     )
+    return resp.data or []
+
+
+def list_work_orders(workspace_id: str) -> list[dict]:
+    sb = get_supabase()
+    resp = (
+        sb.table("work_orders")
+        .select("*, properties!inner(workspace_id)")
+        .eq("properties.workspace_id", workspace_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    rows = resp.data or []
+    for row in rows:
+        row.pop("properties", None)
+    return rows
+
+
+def list_units_table_rows(workspace_id: str) -> list[dict]:
+    sb = get_supabase()
+    resp = sb.rpc("list_units_table_rows", {"workspace_id": workspace_id}).execute()
+    rows = resp.data or []
+    normalized: list[dict] = []
+    for row in rows:
+        tenant_user = None
+        if row.get("tenant_user_id"):
+            tenant_user = {
+                "id": row.get("tenant_user_id"),
+                "full_name": row.get("tenant_full_name"),
+                "email": row.get("tenant_email"),
+                "phone": row.get("tenant_phone"),
+            }
+        latest_work_orders = row.get("latest_work_orders") or []
+        normalized.append(
+            {
+                "property_id": row.get("property_id"),
+                "property_address": row.get("property_address"),
+                "property_zip_code": row.get("property_zip_code"),
+                "unit_id": row.get("unit_id"),
+                "unit_label": row.get("unit_label"),
+                "tenant_user": tenant_user,
+                "manager_name": row.get("manager_name"),
+                "maintenance_requests": row.get("maintenance_requests") or "",
+                "last_updated_at": row.get("property_updated_at"),
+                "has_open_request": row.get("has_open_request", False),
+                "latest_work_orders": latest_work_orders,
+            }
+        )
+    return normalized
+
+
+# ----------------------------
+# Occupancies
+# ----------------------------
+
+def create_occupancy(
+    workspace_id: str,
+    *,
+    unit_id: str,
+    user_id: str,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+) -> dict:
+    sb = get_supabase()
+    payload = {
+        "workspace_id": workspace_id,
+        "unit_id": unit_id,
+        "user_id": user_id,
+        "start_at": start_at.isoformat() if isinstance(start_at, datetime) else start_at,
+        "end_at": end_at.isoformat() if isinstance(end_at, datetime) else end_at,
+    }
+    resp = sb.table("occupancies").insert(payload).execute()
+    return _expect_single(resp, context="create_occupancy")
+
+
+def list_occupancies(
+    workspace_id: str,
+    *,
+    unit_id: str | None = None,
+    user_id: str | None = None,
+) -> list[dict]:
+    sb = get_supabase()
+    q = sb.table("occupancies").select("*").eq("workspace_id", workspace_id)
+    if unit_id:
+        q = q.eq("unit_id", unit_id)
+    if user_id:
+        q = q.eq("user_id", user_id)
+    resp = q.order("created_at", desc=False).execute()
     return resp.data or []
 
 

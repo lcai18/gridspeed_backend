@@ -15,6 +15,7 @@ from api.supabase.db_helpers import (
     approve_pending_account,
     create_auth_user,
     create_conversation,
+    create_occupancy,
     create_media_asset,
     create_message,
     create_pending_account,
@@ -23,25 +24,36 @@ from api.supabase.db_helpers import (
     create_user,
     create_workspace,
     create_work_order,
+    delete_property,
+    delete_users_by_ids,
+    delete_work_orders_for_property,
+    list_resident_user_ids_for_property,
     generate_magic_link,
+    get_unit,
     get_approved_pending_account_by_email,
     get_auth_user_from_access_token,
     get_pending_account,
     get_pending_account_by_email,
     get_property,
     get_user_by_auth_user_id,
+    get_user,
     get_work_order,
     get_workspace,
     list_conversations,
+    list_occupancies,
     list_media_assets_for_message,
     list_media_assets_for_work_order,
     list_messages_for_conversation,
     list_messages_for_work_order,
     list_pending_accounts,
     list_properties,
+    list_property_zip_codes,
+    list_units_table_rows,
     list_units,
     list_users,
-    list_work_orders_for_properties,
+    list_work_orders,
+    update_property,
+    update_unit,
     update_work_order,
 )
 
@@ -157,6 +169,26 @@ def _ensure_work_order_in_workspace(ctx: AuthContext, work_order_id: str) -> dic
     return wo
 
 
+def _ensure_unit_in_workspace(ctx: AuthContext, unit_id: str) -> dict:
+    unit = get_unit(unit_id)
+    if unit is None:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    property_id = unit.get("property_id")
+    if not property_id:
+        raise HTTPException(status_code=500, detail="Unit missing property_id")
+    _ensure_property_in_workspace(ctx, property_id)
+    return unit
+
+
+def _ensure_user_in_workspace(ctx: AuthContext, user_id: str) -> dict:
+    user = get_user(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.get("workspace_id") != ctx.workspace.get("id"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return user
+
+
 # ----------------------------
 # Request models
 # ----------------------------
@@ -170,10 +202,20 @@ class UserCreate(BaseModel):
 
 class PropertyCreate(BaseModel):
     address: str | None = None
+    zip_code: str | None = None
 
 
 class UnitCreate(BaseModel):
     unit_label: str
+
+
+class PropertyUpdate(BaseModel):
+    address: str | None = None
+    zip_code: str | None = None
+
+
+class UnitUpdate(BaseModel):
+    unit_label: str | None = None
 
 
 class WorkOrderCreate(BaseModel):
@@ -221,6 +263,13 @@ class MediaAssetCreate(BaseModel):
     public_url: str | None = None
 
 
+class OccupancyCreate(BaseModel):
+    unit_id: str
+    user_id: str
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+
+
 class PendingAccountCreate(BaseModel):
     email: str
     full_name: str | None = None
@@ -241,6 +290,36 @@ class MagicLinkEmailRequest(BaseModel):
     email: str
     redirect_to: str | None = None
     subject: str | None = None
+
+
+class TenantUser(BaseModel):
+    id: str
+    full_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+
+
+class WorkOrderSummary(BaseModel):
+    id: str
+    title: str | None = None
+    status: str | None = None
+    updated_at: datetime | None = None
+    created_at: datetime | None = None
+    reported_by_user_id: str | None = None
+
+
+class UnitsTableRow(BaseModel):
+    property_id: str
+    property_address: str | None = None
+    property_zip_code: str | None = None
+    unit_id: str
+    unit_label: str | None = None
+    tenant_user: TenantUser | None = None
+    manager_name: str
+    maintenance_requests: str
+    last_updated_at: datetime | None = None
+    has_open_request: bool | None = None
+    latest_work_orders: list[WorkOrderSummary] | None = None
 
 
 # ----------------------------
@@ -278,14 +357,56 @@ async def create_user_endpoint(payload: UserCreate, ctx: AuthContext = Depends(r
 # Properties (workspace-scoped)
 # ----------------------------
 
+# NOTE: The property table UI should use /dashboard/units-table instead of
+# stitching /properties, /occupancies, /properties/{id}/units, and /work-orders.
 @router.get("/properties")
 async def list_properties_endpoint(ctx: AuthContext = Depends(require_auth)):
     return list_properties(ctx.workspace["id"])
 
 
+
+
+@router.get("/properties/zip-codes")
+async def list_property_zip_codes_endpoint(ctx: AuthContext = Depends(require_auth)):
+    return list_property_zip_codes(ctx.workspace["id"])
+
 @router.post("/properties")
 async def create_property_endpoint(payload: PropertyCreate, ctx: AuthContext = Depends(require_auth)):
-    return create_property(ctx.workspace["id"], address=payload.address)
+    return create_property(
+        ctx.workspace["id"],
+        address=payload.address,
+        zip_code=payload.zip_code,
+    )
+
+
+@router.patch("/properties/{property_id}")
+async def update_property_endpoint(
+    property_id: str,
+    payload: PropertyUpdate,
+    ctx: AuthContext = Depends(require_auth),
+):
+    _ensure_property_in_workspace(ctx, property_id)
+    return update_property(
+        property_id,
+        address=payload.address,
+        zip_code=payload.zip_code,
+    )
+
+
+@router.delete("/properties/{property_id}")
+async def delete_property_endpoint(property_id: str, ctx: AuthContext = Depends(require_auth)):
+    _ensure_property_in_workspace(ctx, property_id)
+    resident_user_ids = list_resident_user_ids_for_property(property_id, ctx.workspace["id"])
+    deleted_work_orders = delete_work_orders_for_property(property_id)
+    deleted_property = delete_property(property_id)
+    if deleted_property is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    deleted_resident_users = delete_users_by_ids(resident_user_ids)
+    return {
+        "deleted_property": deleted_property,
+        "deleted_work_orders_count": deleted_work_orders,
+        "deleted_resident_users_count": deleted_resident_users,
+    }
 
 
 # ----------------------------
@@ -298,10 +419,63 @@ async def list_units_endpoint(property_id: str, ctx: AuthContext = Depends(requi
     return list_units(property_id)
 
 
+@router.patch("/properties/{property_id}/units/{unit_id}")
+async def update_unit_endpoint(
+    property_id: str,
+    unit_id: str,
+    payload: UnitUpdate,
+    ctx: AuthContext = Depends(require_auth),
+):
+    _ensure_property_in_workspace(ctx, property_id)
+    unit = _ensure_unit_in_workspace(ctx, unit_id)
+    if unit.get("property_id") != property_id:
+        raise HTTPException(status_code=400, detail="Unit does not belong to this property")
+    return update_unit(unit_id, unit_label=payload.unit_label)
+
+
 @router.post("/properties/{property_id}/units")
 async def create_unit_endpoint(property_id: str, payload: UnitCreate, ctx: AuthContext = Depends(require_auth)):
     _ensure_property_in_workspace(ctx, property_id)
     return create_unit(property_id, payload.unit_label)
+
+
+# ----------------------------
+# Occupancies (workspace-scoped)
+# ----------------------------
+
+@router.get("/occupancies")
+async def list_occupancies_endpoint(
+    unit_id: str | None = None,
+    user_id: str | None = None,
+    ctx: AuthContext = Depends(require_auth),
+):
+    if unit_id:
+        _ensure_unit_in_workspace(ctx, unit_id)
+    if user_id:
+        _ensure_user_in_workspace(ctx, user_id)
+    return list_occupancies(ctx.workspace["id"], unit_id=unit_id, user_id=user_id)
+
+
+@router.post("/occupancies")
+async def create_occupancy_endpoint(payload: OccupancyCreate, ctx: AuthContext = Depends(require_auth)):
+    _ensure_unit_in_workspace(ctx, payload.unit_id)
+    _ensure_user_in_workspace(ctx, payload.user_id)
+    return create_occupancy(
+        ctx.workspace["id"],
+        unit_id=payload.unit_id,
+        user_id=payload.user_id,
+        start_at=payload.start_at,
+        end_at=payload.end_at,
+    )
+
+
+# ----------------------------
+# Dashboard (hydrated table)
+# ----------------------------
+
+@router.get("/dashboard/units-table", response_model=list[UnitsTableRow])
+async def list_units_table_rows_endpoint(ctx: AuthContext = Depends(require_auth)):
+    return list_units_table_rows(ctx.workspace["id"])
 
 
 # ----------------------------
@@ -310,9 +484,7 @@ async def create_unit_endpoint(property_id: str, payload: UnitCreate, ctx: AuthC
 
 @router.get("/work-orders")
 async def list_work_orders_endpoint(ctx: AuthContext = Depends(require_auth)):
-    props = list_properties(ctx.workspace["id"])
-    prop_ids = [p["id"] for p in props if p.get("id")]
-    return list_work_orders_for_properties(prop_ids)
+    return list_work_orders(ctx.workspace["id"])
 
 
 @router.post("/work-orders")
@@ -533,4 +705,3 @@ async def send_magic_link_endpoint(payload: MagicLinkEmailRequest):
     send_email(to=payload.email, subject=subject, body=body)
 
     return {"status": "sent"}
-

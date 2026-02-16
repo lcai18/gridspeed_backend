@@ -1,76 +1,190 @@
+-- ============================================================
+-- FULL MIGRATION-FRIENDLY SCHEMA (legacy-safe)
+-- - Ensures created_at/updated_at exist on ALL tables (even if tables already existed)
+-- - Adds triggers that bump updated_at only when data actually changes
+-- - Drops + recreates list_units_table_rows(uuid) so it compiles cleanly
+-- ============================================================
+
 -- 0) UUID generator
 create extension if not exists pgcrypto;
 
--- 1) Tenancy
-create table if not exists tenants (
+-- ============================================================
+-- 1) TABLES (safe to run repeatedly)
+-- ============================================================
+
+-- -----------------------------
+-- Workspaces
+-- -----------------------------
+create table if not exists workspaces (
   id uuid primary key default gen_random_uuid(),
   name text not null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
+-- -----------------------------
+-- Users
+-- -----------------------------
 create table if not exists users (
   id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references tenants(id) on delete cascade,
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+
+  auth_user_id uuid unique, -- Supabase Auth user id (sub). nullable for non-login contacts
+
   full_name text,
   phone text,
   email text,
-  created_at timestamptz not null default now()
+
+  role text not null default 'resident', -- pm_admin | staff | resident
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
+create unique index if not exists users_workspace_email_uniq
+  on users (workspace_id, lower(email))
+  where email is not null;
+
+create index if not exists idx_users_workspace on users(workspace_id);
+create index if not exists idx_users_auth_user_id on users(auth_user_id);
+
+-- -----------------------------
+-- Pending accounts
+-- -----------------------------
 create table if not exists pending_accounts (
   id uuid primary key default gen_random_uuid(),
+  workspace_id uuid references workspaces(id) on delete set null,
+
   email text not null,
   full_name text,
+
   status text not null default 'pending', -- pending | approved | rejected
   auth_user_id uuid,
+
   created_at timestamptz not null default now(),
-  approved_at timestamptz,
-  unique (email)
+  updated_at timestamptz not null default now(),
+  approved_at timestamptz
 );
 
--- 2) Properties & units
+create unique index if not exists pending_accounts_workspace_email_uniq
+  on pending_accounts (workspace_id, lower(email))
+  where workspace_id is not null;
+
+create unique index if not exists pending_accounts_waitlist_email_uniq
+  on pending_accounts (lower(email))
+  where workspace_id is null;
+
+create index if not exists idx_pending_accounts_status_created
+  on pending_accounts (status, created_at);
+
+-- -----------------------------
+-- Properties
+-- -----------------------------
 create table if not exists properties (
   id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references tenants(id) on delete cascade,
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+
   address text,
-  created_at timestamptz not null default now()
+  zip_code text,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
+create index if not exists idx_properties_workspace on properties(workspace_id);
+
+-- -----------------------------
+-- Units
+-- -----------------------------
 create table if not exists units (
   id uuid primary key default gen_random_uuid(),
   property_id uuid not null references properties(id) on delete cascade,
+
   unit_label text not null,
+
   created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+
   unique (property_id, unit_label)
 );
 
--- 3) Work orders
+create index if not exists idx_units_property on units(property_id);
+
+-- -----------------------------
+-- Occupancies
+-- -----------------------------
+create table if not exists occupancies (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+
+  unit_id uuid not null references units(id) on delete cascade,
+  user_id uuid not null references users(id) on delete cascade,
+
+  start_at timestamptz,
+  end_at timestamptz,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_occupancies_unit on occupancies(unit_id);
+create index if not exists idx_occupancies_user on occupancies(user_id);
+create index if not exists idx_occupancies_workspace on occupancies(workspace_id);
+create index if not exists idx_occupancies_unit_end_start on occupancies(unit_id, end_at, start_at);
+
+create unique index if not exists occupancies_unit_user_start_uniq
+  on occupancies (unit_id, user_id, start_at);
+
+-- -----------------------------
+-- Work orders
+-- -----------------------------
 create table if not exists work_orders (
   id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references tenants(id) on delete cascade,
+
   property_id uuid not null references properties(id) on delete restrict,
   unit_id uuid references units(id) on delete set null,
+
   reported_by_user_id uuid references users(id) on delete set null,
 
   title text,
   description text,
-  priority text, -- low/med/high/urgent
-  status text not null default 'new',
 
-  created_at timestamptz not null default now()
+  priority text, -- low | med | high | urgent
+  status text not null default 'new', -- new | triaged | in_progress | waiting | done | canceled
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
--- 4) Conversations & messages
+create index if not exists idx_work_orders_property_created
+  on work_orders (property_id, created_at desc);
+
+create index if not exists idx_work_orders_unit_created
+  on work_orders (unit_id, created_at desc);
+
+create index if not exists idx_work_orders_reported_by
+  on work_orders (reported_by_user_id);
+
+-- -----------------------------
+-- Conversations
+-- -----------------------------
 create table if not exists conversations (
   id uuid primary key default gen_random_uuid(),
   work_order_id uuid not null references work_orders(id) on delete cascade,
 
-  party_type text not null, -- tenant | vendor | internal
+  party_type text not null, -- resident | vendor | internal
   party_user_id uuid references users(id) on delete set null,
 
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
+create index if not exists idx_conversations_work_order
+  on conversations(work_order_id);
+
+-- -----------------------------
+-- Messages
+-- -----------------------------
 create table if not exists messages (
   id uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references conversations(id) on delete cascade,
@@ -78,23 +192,32 @@ create table if not exists messages (
 
   direction text not null, -- inbound | outbound
   channel text not null,   -- sms | call | email | app
+
   sender_user_id uuid references users(id) on delete set null,
   recipient_user_id uuid references users(id) on delete set null,
 
   body text,
   raw_payload jsonb,
 
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
--- 5) Helpful indexes (you’ll want these immediately)
-create index if not exists idx_conversations_work_order on conversations(work_order_id);
-create index if not exists idx_messages_work_order_created on messages(work_order_id, created_at);
-create index if not exists idx_messages_conversation_created on messages(conversation_id, created_at);
+create index if not exists idx_messages_work_order_created
+  on messages(work_order_id, created_at);
 
--- 6) Images & media attachments
+create index if not exists idx_messages_conversation_created
+  on messages(conversation_id, created_at);
+
+create index if not exists idx_messages_raw_payload_gin
+  on messages using gin (raw_payload);
+
+-- -----------------------------
+-- Media assets
+-- -----------------------------
 create table if not exists media_assets (
   id uuid primary key default gen_random_uuid(),
+
   work_order_id uuid not null references work_orders(id) on delete cascade,
   message_id uuid references messages(id) on delete set null,
   uploaded_by_user_id uuid references users(id) on delete set null,
@@ -109,10 +232,220 @@ create table if not exists media_assets (
   storage_path text not null,
   public_url text,
 
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create index if not exists idx_media_assets_work_order_created
   on media_assets(work_order_id, created_at);
+
 create index if not exists idx_media_assets_message_created
   on media_assets(message_id, created_at);
+
+-- ============================================================
+-- 2) LEGACY-SAFE COLUMN BACKFILL (critical!)
+-- If tables existed already, CREATE TABLE IF NOT EXISTS won't add columns.
+-- These ALTERs guarantee updated_at/created_at exist before functions reference them.
+-- ============================================================
+
+alter table workspaces       add column if not exists created_at timestamptz not null default now();
+alter table workspaces       add column if not exists updated_at timestamptz not null default now();
+
+alter table users            add column if not exists created_at timestamptz not null default now();
+alter table users            add column if not exists updated_at timestamptz not null default now();
+
+alter table pending_accounts add column if not exists created_at timestamptz not null default now();
+alter table pending_accounts add column if not exists updated_at timestamptz not null default now();
+
+alter table properties       add column if not exists created_at timestamptz not null default now();
+alter table properties       add column if not exists updated_at timestamptz not null default now();
+alter table properties       add column if not exists zip_code text;
+
+alter table units            add column if not exists created_at timestamptz not null default now();
+alter table units            add column if not exists updated_at timestamptz not null default now();
+
+alter table occupancies      add column if not exists created_at timestamptz not null default now();
+alter table occupancies      add column if not exists updated_at timestamptz not null default now();
+
+alter table work_orders      add column if not exists created_at timestamptz not null default now();
+alter table work_orders      add column if not exists updated_at timestamptz not null default now();
+
+alter table conversations    add column if not exists created_at timestamptz not null default now();
+alter table conversations    add column if not exists updated_at timestamptz not null default now();
+
+alter table messages         add column if not exists created_at timestamptz not null default now();
+alter table messages         add column if not exists updated_at timestamptz not null default now();
+
+alter table media_assets     add column if not exists created_at timestamptz not null default now();
+alter table media_assets     add column if not exists updated_at timestamptz not null default now();
+
+-- ============================================================
+-- 3) updated_at trigger function + triggers
+-- - bumps updated_at ONLY if non-updated_at fields actually changed
+-- ============================================================
+
+create or replace function set_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  if (to_jsonb(new) - 'updated_at') is distinct from (to_jsonb(old) - 'updated_at') then
+    new.updated_at = now();
+  end if;
+  return new;
+end;
+$$;
+
+do $$
+declare
+  t text;
+begin
+  foreach t in array array[
+    'workspaces',
+    'users',
+    'pending_accounts',
+    'properties',
+    'units',
+    'occupancies',
+    'work_orders',
+    'conversations',
+    'messages',
+    'media_assets'
+  ]
+  loop
+    execute format('drop trigger if exists set_%s_updated_at on %I;', t, t);
+    execute format(
+      'create trigger set_%s_updated_at
+       before update on %I
+       for each row execute function set_updated_at();',
+      t, t
+    );
+  end loop;
+end;
+$$;
+
+-- ============================================================
+-- 4) Dashboard helper function (DROP + recreate avoids 42P13)
+-- ============================================================
+
+drop function if exists list_units_table_rows(uuid);
+
+create function list_units_table_rows(workspace_id uuid)
+returns table (
+  property_id uuid,
+  property_address text,
+  property_updated_at timestamptz,
+
+  unit_id uuid,
+  unit_label text,
+
+  tenant_user_id uuid,
+  tenant_full_name text,
+  tenant_email text,
+  tenant_phone text,
+
+  manager_name text,
+  maintenance_requests text,
+
+  work_order_updated_at timestamptz,   -- <-- last activity from work orders
+  has_open_request boolean,
+  latest_work_orders jsonb
+)
+language sql
+stable
+as $$
+  select
+    p.id as property_id,
+    p.address as property_address,
+    p.updated_at as property_updated_at,
+
+    u.id as unit_id,
+    u.unit_label as unit_label,
+
+    tenant.user_id as tenant_user_id,
+    tenant.full_name as tenant_full_name,
+    tenant.email as tenant_email,
+    tenant.phone as tenant_phone,
+
+    coalesce(manager_reporter.full_name, default_manager.full_name, 'Unassigned') as manager_name,
+    coalesce(wo_agg.maintenance_requests, '') as maintenance_requests,
+
+    wo_agg.last_updated_at as work_order_updated_at,
+    coalesce(wo_agg.has_open_request, false) as has_open_request,
+    wo_agg.latest_work_orders as latest_work_orders
+  from properties p
+  join units u on u.property_id = p.id
+
+  left join lateral (
+    select o.user_id, usr.full_name, usr.email, usr.phone
+    from occupancies o
+    join users usr on usr.id = o.user_id
+    where o.unit_id = u.id
+    order by (o.end_at is null) desc, o.start_at desc nulls last, o.created_at desc
+    limit 1
+  ) tenant on true
+
+  left join lateral (
+    with scoped as (
+      select wo.*
+      from work_orders wo
+      where (
+        wo.unit_id = u.id
+        or (
+          wo.unit_id is null
+          and wo.property_id = p.id
+          and not exists (
+            select 1 from work_orders w2 where w2.unit_id = u.id
+          )
+        )
+      )
+    ),
+    ordered as (
+      select * from scoped
+      order by coalesce(updated_at, created_at) desc
+    ),
+    limited as (
+      select * from ordered limit 3
+    )
+    select
+      max(coalesce(updated_at, created_at)) as last_updated_at,
+      string_agg(title, ' ; ' order by coalesce(updated_at, created_at) desc) as maintenance_requests,
+      bool_or(status not in ('done', 'canceled')) as has_open_request,
+      (
+        select jsonb_agg(
+          jsonb_build_object(
+            'id', id,
+            'title', title,
+            'status', status,
+            'updated_at', updated_at,
+            'created_at', created_at,
+            'reported_by_user_id', reported_by_user_id
+          )
+          order by coalesce(updated_at, created_at) desc
+        )
+        from limited
+      ) as latest_work_orders,
+      (select reported_by_user_id from ordered limit 1) as latest_reported_by_user_id
+    from ordered
+  ) wo_agg on true
+
+  left join lateral (
+    select u.full_name
+    from users u
+    where u.id = wo_agg.latest_reported_by_user_id
+      and u.role in ('staff', 'pm_admin')
+    limit 1
+  ) manager_reporter on true
+
+  left join lateral (
+    select u.full_name
+    from users u
+    where u.workspace_id = p.workspace_id
+      and u.role in ('staff', 'pm_admin')
+    order by u.created_at asc
+    limit 1
+  ) default_manager on true
+
+  where p.workspace_id = workspace_id
+  order by p.created_at asc, u.unit_label asc;
+$$;
