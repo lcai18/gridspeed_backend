@@ -290,23 +290,9 @@ def generate_magic_link(email: str, redirect_to: str | None = None) -> str:
     
     data = getattr(resp, "data", None) or resp
     action_link = getattr(getattr(data, "properties", None), "action_link", None)
-    print(action_link)
     if not action_link:
         raise SupabaseError(f"No action link returned. resp={resp!r}")
     return action_link
-
-
-def send_magic_link_otp(email: str, redirect_to: str | None = None) -> None:
-    """Ask Supabase Auth to send its hosted magic-link email to the user."""
-    sb = get_supabase()
-    payload = {"email": email}
-    if redirect_to:
-        payload["options"] = {"email_redirect_to": redirect_to}
-    sb.auth.sign_in_with_otp(payload)
-
-
-
-
 
 # ----------------------------
 # Properties & units
@@ -786,12 +772,12 @@ def create_media_asset(
     return _expect_single(resp, context="create_media_asset")
 
 #TODO: to be removed
-def get_default_property_for_tenant(tenant_id: str) -> dict | None:
+def get_default_property_for_workspace(workspace_id: str) -> dict | None:
     sb = get_supabase()
     response = (
         sb.table("properties")
         .select("*")
-        .eq("tenant_id", tenant_id)
+        .eq("workspace_id", workspace_id)
         .order("created_at", desc=False)
         .limit(1)
         .execute()

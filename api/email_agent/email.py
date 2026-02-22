@@ -19,7 +19,6 @@ def send_email(to, subject, body, in_reply_to=None, references=None):
         subject=subject,
         plain_text_content=body
     )
-    
     message.add_header(Header("Message-ID", message_id))
 
     if in_reply_to:
@@ -28,6 +27,10 @@ def send_email(to, subject, body, in_reply_to=None, references=None):
     if references:
         message.add_header(Header("References", references))
 
-    sg.send(message)
-    
+    resp = sg.send(message)
+
+
+    if resp.status_code >= 400:
+        raise RuntimeError(f"SendGrid send failed: {resp.status_code}")
+
     return message_id

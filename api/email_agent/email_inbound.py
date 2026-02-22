@@ -1,6 +1,7 @@
 from email.utils import parseaddr
 import os
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from uuid import uuid4
 
 from api.email_agent.ai import run_ai_agent
@@ -11,9 +12,8 @@ from api.supabase.db_helpers import (
     create_message,
     create_work_order,
     find_message_by_external_id,
-    get_default_property_for_tenant,
+    get_default_property_for_workspace,
     get_user_by_unique_email,
-    send_magic_link_otp,
     SupabaseError,
     update_work_order,
 )
@@ -21,6 +21,63 @@ import traceback
 import io
 
 router = APIRouter()
+
+
+@router.get("/maintenance-request/verification-success", response_class=HTMLResponse)
+async def verification_success_page():
+    return """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Verification successful</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #f8fafc;
+      color: #0f172a;
+    }
+    .card {
+      width: min(540px, 90vw);
+      background: #ffffff;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      padding: 32px;
+      text-align: center;
+    }
+    .icon {
+      font-size: 36px;
+      line-height: 1;
+    }
+    h1 {
+      margin: 14px 0 8px;
+      font-size: 28px;
+    }
+    p {
+      margin: 0;
+      color: #334155;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="icon">✅</div>
+    <h1>You're verified</h1>
+    <p>Thanks for confirming your identity. We've received your maintenance request and our team will follow up shortly.</p>
+  </main>
+</body>
+</html>
+"""
 
 
 def extract_header(headers: str, key: str):
@@ -151,9 +208,6 @@ async def inbound_email(request: Request):
             print(f"No user found for inbound email: {tenant_email}")
             raise HTTPException(status_code=403, detail="User not authorized")
 
-        confirmation_redirect = os.getenv("EMAIL_CONFIRM_REDIRECT_URL")
-        send_magic_link_otp(tenant_email, redirect_to=confirmation_redirect)
-
         attachments = []
         for att in form_data.get('_attachments', []):
             if att['content_type'] and att['content_type'].startswith("image/"):
@@ -177,8 +231,8 @@ async def inbound_email(request: Request):
             work_order_id = existing_message["work_order_id"]
             conversation_id = existing_message["conversation_id"]
         else:
-            tenant_id = user["tenant_id"]
-            property_record = get_default_property_for_tenant(tenant_id)
+            workspace_id = user["workspace_id"]
+            property_record = get_default_property_for_workspace(workspace_id)
             if not property_record:
                 raise HTTPException(status_code=400, detail="No property configured for tenant")
             property_id = property_record["id"]
