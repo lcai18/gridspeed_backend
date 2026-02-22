@@ -12,7 +12,9 @@ from api.supabase.db_helpers import (
     create_work_order,
     find_message_by_external_id,
     get_default_property_for_tenant,
-    get_user_by_email,
+    get_user_by_unique_email,
+    send_magic_link_otp,
+    SupabaseError,
     update_work_order,
 )
 import traceback
@@ -144,10 +146,13 @@ async def inbound_email(request: Request):
         print(f"Subject: {subject}")
         print(f"Body length: {len(body_text)}")
 
-        user = get_user_by_email(tenant_email) if tenant_email else None
+        user = get_user_by_unique_email(tenant_email) if tenant_email else None
         if not user:
             print(f"No user found for inbound email: {tenant_email}")
             raise HTTPException(status_code=403, detail="User not authorized")
+
+        confirmation_redirect = os.getenv("EMAIL_CONFIRM_REDIRECT_URL")
+        send_magic_link_otp(tenant_email, redirect_to=confirmation_redirect)
 
         attachments = []
         for att in form_data.get('_attachments', []):
@@ -256,6 +261,9 @@ async def inbound_email(request: Request):
     
     except HTTPException:
         raise
+    except SupabaseError as e:
+        print(f"Supabase error: {str(e)}")
+        raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         print(f"ERROR: {str(e)}")
         print(traceback.format_exc())

@@ -296,6 +296,15 @@ def generate_magic_link(email: str, redirect_to: str | None = None) -> str:
     return action_link
 
 
+def send_magic_link_otp(email: str, redirect_to: str | None = None) -> None:
+    """Ask Supabase Auth to send its hosted magic-link email to the user."""
+    sb = get_supabase()
+    payload = {"email": email}
+    if redirect_to:
+        payload["options"] = {"email_redirect_to": redirect_to}
+    sb.auth.sign_in_with_otp(payload)
+
+
 
 
 
@@ -792,9 +801,6 @@ def get_default_property_for_tenant(tenant_id: str) -> dict | None:
 #TODO: to be removed
 def get_user_by_email(email: str) -> dict | None:
     sb = get_supabase()
-    #debug
-    allusers = sb.table("users").select("*").execute()
-    print(f"All users in DB: {allusers.data}")
     response = (
         sb.table("users")
         .select("*")
@@ -803,6 +809,23 @@ def get_user_by_email(email: str) -> dict | None:
         .execute()
     )
     return _maybe_single(response)
+
+
+def get_user_by_unique_email(email: str) -> dict | None:
+    """Return a single user by email, rejecting ambiguous cross-workspace matches."""
+    sb = get_supabase()
+    response = (
+        sb.table("users")
+        .select("*")
+        .ilike("email", email)
+        .execute()
+    )
+    matches = response.data or []
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise SupabaseError("Email is associated with multiple workspaces")
+    return matches[0]
 
 def list_media_assets_for_work_order(work_order_id: str) -> list[dict]:
     sb = get_supabase()
