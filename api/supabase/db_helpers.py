@@ -290,14 +290,9 @@ def generate_magic_link(email: str, redirect_to: str | None = None) -> str:
     
     data = getattr(resp, "data", None) or resp
     action_link = getattr(getattr(data, "properties", None), "action_link", None)
-    print(action_link)
     if not action_link:
         raise SupabaseError(f"No action link returned. resp={resp!r}")
     return action_link
-
-
-
-
 
 # ----------------------------
 # Properties & units
@@ -741,6 +736,31 @@ def find_message_by_external_id(external_message_id: str) -> dict | None:
     return _maybe_single(resp)
 
 
+def list_recent_email_messages_for_work_order(work_order_id: str, *, limit: int = 10) -> list[dict]:
+    sb = get_supabase()
+    resp = (
+        sb.table("messages")
+        .select("direction, body, raw_payload, created_at")
+        .eq("work_order_id", work_order_id)
+        .eq("channel", "email")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return resp.data or []
+
+
+def update_message_raw_payload(message_id: str, raw_payload: dict) -> dict:
+    sb = get_supabase()
+    resp = (
+        sb.table("messages")
+        .update({"raw_payload": raw_payload})
+        .eq("id", message_id)
+        .execute()
+    )
+    return _expect_single(resp, context="update_message_raw_payload")
+
+
 # ----------------------------
 # Media assets
 # ----------------------------
@@ -777,12 +797,12 @@ def create_media_asset(
     return _expect_single(resp, context="create_media_asset")
 
 #TODO: to be removed
-def get_default_property_for_tenant(tenant_id: str) -> dict | None:
+def get_default_property_for_workspace(workspace_id: str) -> dict | None:
     sb = get_supabase()
     response = (
         sb.table("properties")
         .select("*")
-        .eq("tenant_id", tenant_id)
+        .eq("workspace_id", workspace_id)
         .order("created_at", desc=False)
         .limit(1)
         .execute()
@@ -792,9 +812,6 @@ def get_default_property_for_tenant(tenant_id: str) -> dict | None:
 #TODO: to be removed
 def get_user_by_email(email: str) -> dict | None:
     sb = get_supabase()
-    #debug
-    allusers = sb.table("users").select("*").execute()
-    print(f"All users in DB: {allusers.data}")
     response = (
         sb.table("users")
         .select("*")
@@ -803,6 +820,23 @@ def get_user_by_email(email: str) -> dict | None:
         .execute()
     )
     return _maybe_single(response)
+
+
+def get_user_by_unique_email(email: str) -> dict | None:
+    """Return a single user by email, rejecting ambiguous cross-workspace matches."""
+    sb = get_supabase()
+    response = (
+        sb.table("users")
+        .select("*")
+        .ilike("email", email)
+        .execute()
+    )
+    matches = response.data or []
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise SupabaseError("Email is associated with multiple workspaces")
+    return matches[0]
 
 def list_media_assets_for_work_order(work_order_id: str) -> list[dict]:
     sb = get_supabase()

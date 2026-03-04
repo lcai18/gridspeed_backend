@@ -1,9 +1,10 @@
 from email.utils import parseaddr
 import os
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from uuid import uuid4
 
-from api.email_agent.ai import run_ai_agent
+from api.email_agent.ai import RECENT_TURNS_TO_KEEP, condense_rolling_summary, run_ai_agent
 from api.email_agent.email import send_email
 from api.supabase.image_storage import upload_image
 from api.supabase.db_helpers import (
@@ -11,14 +12,19 @@ from api.supabase.db_helpers import (
     create_message,
     create_work_order,
     find_message_by_external_id,
-    get_default_property_for_tenant,
-    get_user_by_email,
+    list_recent_email_messages_for_work_order,
+    get_default_property_for_workspace,
+    get_user_by_unique_email,
+    SupabaseError,
+    update_message_raw_payload,
     update_work_order,
 )
 import traceback
 import io
 
 router = APIRouter()
+
+
 
 
 def extract_header(headers: str, key: str):
@@ -144,7 +150,7 @@ async def inbound_email(request: Request):
         print(f"Subject: {subject}")
         print(f"Body length: {len(body_text)}")
 
-        user = get_user_by_email(tenant_email) if tenant_email else None
+        user = get_user_by_unique_email(tenant_email) if tenant_email else None
         if not user:
             print(f"No user found for inbound email: {tenant_email}")
             raise HTTPException(status_code=403, detail="User not authorized")
@@ -172,8 +178,8 @@ async def inbound_email(request: Request):
             work_order_id = existing_message["work_order_id"]
             conversation_id = existing_message["conversation_id"]
         else:
-            tenant_id = user["tenant_id"]
-            property_record = get_default_property_for_tenant(tenant_id)
+            workspace_id = user["workspace_id"]
+            property_record = get_default_property_for_workspace(workspace_id)
             if not property_record:
                 raise HTTPException(status_code=400, detail="No property configured for tenant")
             property_id = property_record["id"]
@@ -208,22 +214,76 @@ async def inbound_email(request: Request):
                     print(f"Failed to upload image: {e}")
                     print(traceback.format_exc())
         
-        create_message(
+        inbound_raw_payload = {
+            "external_message_id": tenant_msg_id,
+            "from": tenant_email,
+            "subject": subject,
+            "in_reply_to": in_reply_to,
+            "image_urls": image_urls,
+        }
+        inbound_message = create_message(
             conversation_id,
             work_order_id,
             direction="inbound",
             channel="email",
             body=body_text,
-            raw_payload={
-                "external_message_id": tenant_msg_id,
-                "from": tenant_email,
-                "subject": subject,
-                "in_reply_to": in_reply_to,
-                "image_urls": image_urls,
-            },
+            raw_payload=inbound_raw_payload,
         )
 
-        ai_result = run_ai_agent(subject, body_text, image_data)
+        recent_messages = list_recent_email_messages_for_work_order(
+            work_order_id,
+            limit=RECENT_TURNS_TO_KEEP,
+        )
+        recent_messages = list(reversed(recent_messages))
+
+        recent_history = []
+        for msg in recent_messages:
+            payload = msg.get("raw_payload") or {}
+            recent_history.append(
+                {
+                    "direction": msg.get("direction"),
+                    "subject": payload.get("subject"),
+                    "body": msg.get("body") or "",
+                }
+            )
+
+        all_messages = list_recent_email_messages_for_work_order(work_order_id, limit=200)
+        previous_summary = ""
+        for msg in reversed(all_messages):
+            payload = msg.get("raw_payload") or {}
+            if isinstance(payload.get("rolling_summary"), str) and payload["rolling_summary"].strip():
+                previous_summary = payload["rolling_summary"].strip()
+                break
+
+        older_messages = list(reversed(all_messages[RECENT_TURNS_TO_KEEP:]))
+
+        rolling_summary = previous_summary
+        if older_messages:
+            overflow_lines = []
+            for msg in older_messages:
+                payload = msg.get("raw_payload") or {}
+                overflow_subject = payload.get("subject")
+                overflow_body = msg.get("body") or ""
+                overflow_direction = msg.get("direction") or "unknown"
+                overflow_lines.append(
+                    f"{overflow_direction}"
+                    + (f" | subject={overflow_subject}" if overflow_subject else "")
+                    + f" | body={overflow_body}"
+                )
+
+            rolling_summary = condense_rolling_summary(previous_summary, overflow_lines)
+
+        if rolling_summary:
+            inbound_raw_payload["rolling_summary"] = rolling_summary
+            update_message_raw_payload(inbound_message["id"], inbound_raw_payload)
+
+        ai_result = run_ai_agent(
+            subject,
+            body_text,
+            image_data,
+            recent_history=recent_history,
+            rolling_summary=rolling_summary or None,
+        )
 
         ai_message_id = send_email(
             to=tenant_email,
@@ -256,6 +316,9 @@ async def inbound_email(request: Request):
     
     except HTTPException:
         raise
+    except SupabaseError as e:
+        print(f"Supabase error: {str(e)}")
+        raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         print(f"ERROR: {str(e)}")
         print(traceback.format_exc())
