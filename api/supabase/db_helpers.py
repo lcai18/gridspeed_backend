@@ -736,6 +736,31 @@ def find_message_by_external_id(external_message_id: str) -> dict | None:
     return _maybe_single(resp)
 
 
+def list_recent_email_messages_for_work_order(work_order_id: str, *, limit: int = 10) -> list[dict]:
+    sb = get_supabase()
+    resp = (
+        sb.table("messages")
+        .select("direction, body, raw_payload, created_at")
+        .eq("work_order_id", work_order_id)
+        .eq("channel", "email")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return resp.data or []
+
+
+def update_message_raw_payload(message_id: str, raw_payload: dict) -> dict:
+    sb = get_supabase()
+    resp = (
+        sb.table("messages")
+        .update({"raw_payload": raw_payload})
+        .eq("id", message_id)
+        .execute()
+    )
+    return _expect_single(resp, context="update_message_raw_payload")
+
+
 # ----------------------------
 # Media assets
 # ----------------------------

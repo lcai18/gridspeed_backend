@@ -9,6 +9,8 @@ load_dotenv()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+RECENT_TURNS_TO_KEEP = 4
+
 SYSTEM_PROMPT = """
 You are a property management maintenance intake assistant.
 
@@ -31,7 +33,13 @@ Format:
 }
 """
 
-def run_ai_agent(subject: str, body: str, image_data: list = None) -> dict:
+def run_ai_agent(
+    subject: str,
+    body: str,
+    image_data: list = None,
+    recent_history: list | None = None,
+    rolling_summary: str | None = None,
+) -> dict:
     messages_content = []
     
     text_content = f"Subject: {subject}\nMessage: {body}"
@@ -39,6 +47,34 @@ def run_ai_agent(subject: str, body: str, image_data: list = None) -> dict:
         "type": "text",
         "text": text_content
     })
+
+    if rolling_summary:
+        messages_content.append(
+            {
+                "type": "text",
+                "text": f"Rolling summary of older conversation context:\n{rolling_summary}",
+            }
+        )
+
+    if recent_history:
+        history_lines = []
+        for item in recent_history:
+            direction = item.get("direction", "unknown")
+            history_subject = item.get("subject")
+            history_body = item.get("body") or ""
+            if history_subject:
+                history_lines.append(
+                    f"- {direction} | subject={history_subject} | body={history_body}"
+                )
+            else:
+                history_lines.append(f"- {direction} | body={history_body}")
+
+        messages_content.append(
+            {
+                "type": "text",
+                "text": f"Most recent {RECENT_TURNS_TO_KEEP} email turns:\n" + "\n".join(history_lines),
+            }
+        )
     
     if image_data:
         print(f"Adding {len(image_data)} images to AI request")
@@ -117,3 +153,40 @@ def run_ai_agent(subject: str, body: str, image_data: list = None) -> dict:
                 "and will follow up shortly."
             )
         }
+
+
+def condense_rolling_summary(
+    previous_summary: str | None,
+    overflow_lines: list[str],
+) -> str:
+    """Create an AI-condensed rolling summary for older email turns."""
+    summary_seed = (previous_summary or "").strip()
+    if not overflow_lines and summary_seed:
+        return summary_seed
+    if not overflow_lines:
+        return ""
+
+    prompt_lines = [
+        "Create an AI-condensed rolling summary of this email thread.",
+        "Keep it concise and preserve key commitments, dates, and next actions.",
+        "Return plain text only.",
+    ]
+    if summary_seed:
+        prompt_lines.append(f"Current rolling summary:\n{summary_seed}")
+    prompt_lines.append("New older turns to fold in:")
+    prompt_lines.extend(f"- {line}" for line in overflow_lines)
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "You produce concise, accurate rolling summaries for email threads.",
+            },
+            {"role": "user", "content": "\n".join(prompt_lines)},
+        ],
+        temperature=0.2,
+        max_tokens=400,
+    )
+
+    return (response.choices[0].message.content or "").strip()

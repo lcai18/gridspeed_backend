@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from uuid import uuid4
 
-from api.email_agent.ai import run_ai_agent
+from api.email_agent.ai import RECENT_TURNS_TO_KEEP, condense_rolling_summary, run_ai_agent
 from api.email_agent.email import send_email
 from api.supabase.image_storage import upload_image
 from api.supabase.db_helpers import (
@@ -12,9 +12,11 @@ from api.supabase.db_helpers import (
     create_message,
     create_work_order,
     find_message_by_external_id,
+    list_recent_email_messages_for_work_order,
     get_default_property_for_workspace,
     get_user_by_unique_email,
     SupabaseError,
+    update_message_raw_payload,
     update_work_order,
 )
 import traceback
@@ -23,61 +25,6 @@ import io
 router = APIRouter()
 
 
-@router.get("/maintenance-request/verification-success", response_class=HTMLResponse)
-async def verification_success_page():
-    return """
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Verification successful</title>
-  <style>
-    :root {
-      color-scheme: light;
-      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      background: #f8fafc;
-      color: #0f172a;
-    }
-    .card {
-      width: min(540px, 90vw);
-      background: #ffffff;
-      border-radius: 12px;
-      border: 1px solid #e2e8f0;
-      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
-      padding: 32px;
-      text-align: center;
-    }
-    .icon {
-      font-size: 36px;
-      line-height: 1;
-    }
-    h1 {
-      margin: 14px 0 8px;
-      font-size: 28px;
-    }
-    p {
-      margin: 0;
-      color: #334155;
-      font-size: 16px;
-    }
-  </style>
-</head>
-<body>
-  <main class="card">
-    <div class="icon">✅</div>
-    <h1>You're verified</h1>
-    <p>Thanks for confirming your identity. We've received your maintenance request and our team will follow up shortly.</p>
-  </main>
-</body>
-</html>
-"""
 
 
 def extract_header(headers: str, key: str):
@@ -267,22 +214,76 @@ async def inbound_email(request: Request):
                     print(f"Failed to upload image: {e}")
                     print(traceback.format_exc())
         
-        create_message(
+        inbound_raw_payload = {
+            "external_message_id": tenant_msg_id,
+            "from": tenant_email,
+            "subject": subject,
+            "in_reply_to": in_reply_to,
+            "image_urls": image_urls,
+        }
+        inbound_message = create_message(
             conversation_id,
             work_order_id,
             direction="inbound",
             channel="email",
             body=body_text,
-            raw_payload={
-                "external_message_id": tenant_msg_id,
-                "from": tenant_email,
-                "subject": subject,
-                "in_reply_to": in_reply_to,
-                "image_urls": image_urls,
-            },
+            raw_payload=inbound_raw_payload,
         )
 
-        ai_result = run_ai_agent(subject, body_text, image_data)
+        recent_messages = list_recent_email_messages_for_work_order(
+            work_order_id,
+            limit=RECENT_TURNS_TO_KEEP,
+        )
+        recent_messages = list(reversed(recent_messages))
+
+        recent_history = []
+        for msg in recent_messages:
+            payload = msg.get("raw_payload") or {}
+            recent_history.append(
+                {
+                    "direction": msg.get("direction"),
+                    "subject": payload.get("subject"),
+                    "body": msg.get("body") or "",
+                }
+            )
+
+        all_messages = list_recent_email_messages_for_work_order(work_order_id, limit=200)
+        previous_summary = ""
+        for msg in reversed(all_messages):
+            payload = msg.get("raw_payload") or {}
+            if isinstance(payload.get("rolling_summary"), str) and payload["rolling_summary"].strip():
+                previous_summary = payload["rolling_summary"].strip()
+                break
+
+        older_messages = list(reversed(all_messages[RECENT_TURNS_TO_KEEP:]))
+
+        rolling_summary = previous_summary
+        if older_messages:
+            overflow_lines = []
+            for msg in older_messages:
+                payload = msg.get("raw_payload") or {}
+                overflow_subject = payload.get("subject")
+                overflow_body = msg.get("body") or ""
+                overflow_direction = msg.get("direction") or "unknown"
+                overflow_lines.append(
+                    f"{overflow_direction}"
+                    + (f" | subject={overflow_subject}" if overflow_subject else "")
+                    + f" | body={overflow_body}"
+                )
+
+            rolling_summary = condense_rolling_summary(previous_summary, overflow_lines)
+
+        if rolling_summary:
+            inbound_raw_payload["rolling_summary"] = rolling_summary
+            update_message_raw_payload(inbound_message["id"], inbound_raw_payload)
+
+        ai_result = run_ai_agent(
+            subject,
+            body_text,
+            image_data,
+            recent_history=recent_history,
+            rolling_summary=rolling_summary or None,
+        )
 
         ai_message_id = send_email(
             to=tenant_email,
