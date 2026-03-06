@@ -316,9 +316,7 @@ class UnitsTableRow(BaseModel):
     unit_label: str | None = None
     tenant_user: TenantUser | None = None
     manager_name: str
-    maintenance_requests: str
     last_updated_at: datetime | None = None
-    has_open_request: bool | None = None
     latest_work_orders: list[WorkOrderSummary] | None = None
 
 

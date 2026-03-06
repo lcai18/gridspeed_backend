@@ -593,9 +593,7 @@ def list_units_table_rows(workspace_id: str) -> list[dict]:
                 "unit_label": row.get("unit_label"),
                 "tenant_user": tenant_user,
                 "manager_name": row.get("manager_name"),
-                "maintenance_requests": row.get("maintenance_requests") or "",
                 "last_updated_at": row.get("property_updated_at"),
-                "has_open_request": row.get("has_open_request", False),
                 "latest_work_orders": latest_work_orders,
             }
         )
