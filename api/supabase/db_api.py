@@ -24,6 +24,7 @@ from api.supabase.db_helpers import (
     create_user,
     create_workspace,
     create_work_order,
+    create_vendor,
     delete_property,
     delete_users_by_ids,
     delete_work_orders_for_property,
@@ -37,6 +38,7 @@ from api.supabase.db_helpers import (
     get_property,
     get_user_by_auth_user_id,
     get_user,
+    get_vendor,
     get_work_order,
     get_workspace,
     list_conversations,
@@ -48,12 +50,14 @@ from api.supabase.db_helpers import (
     list_pending_accounts,
     list_properties,
     list_property_zip_codes,
+    list_vendors,
     list_units_table_rows,
     list_units,
     list_users,
     list_work_orders,
     update_property,
     update_unit,
+    update_vendor,
     update_work_order,
 )
 
@@ -189,6 +193,15 @@ def _ensure_user_in_workspace(ctx: AuthContext, user_id: str) -> dict:
     return user
 
 
+def _ensure_vendor_in_workspace(ctx: AuthContext, vendor_id: str) -> dict:
+    vendor = get_vendor(vendor_id)
+    if vendor is None:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    if vendor.get("workspace_id") != ctx.workspace.get("id"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return vendor
+
+
 # ----------------------------
 # Request models
 # ----------------------------
@@ -203,6 +216,26 @@ class UserCreate(BaseModel):
 class PropertyCreate(BaseModel):
     address: str | None = None
     zip_code: str | None = None
+
+
+class VendorCreate(BaseModel):
+    full_name: str | None = None
+    trade: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    is_active: bool = True
+    rating: float | None = None
+    dispatch_priority: int | None = None
+
+
+class VendorUpdate(BaseModel):
+    full_name: str | None = None
+    trade: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    is_active: bool | None = None
+    rating: float | None = None
+    dispatch_priority: int | None = None
 
 
 class UnitCreate(BaseModel):
@@ -342,7 +375,7 @@ async def me(ctx: AuthContext = Depends(require_auth)):
 
 
 # ----------------------------
-# Users (workspace-scoped)
+# Users (workspace-scoped internal staff/residents only)
 # ----------------------------
 
 @router.get("/users")
@@ -360,6 +393,52 @@ async def create_user_endpoint(payload: UserCreate, ctx: AuthContext = Depends(r
         phone=payload.phone,
         email=payload.email,
         role=payload.role or "resident",
+    )
+
+
+# ----------------------------
+# Vendors (workspace-scoped external contacts)
+# ----------------------------
+
+@router.get("/vendors")
+async def list_vendors_endpoint(
+    trade: str | None = None,
+    is_active: bool | None = None,
+    ctx: AuthContext = Depends(require_auth),
+):
+    return list_vendors(ctx.workspace["id"], trade=trade, is_active=is_active)
+
+
+@router.post("/vendors")
+async def create_vendor_endpoint(payload: VendorCreate, ctx: AuthContext = Depends(require_auth)):
+    return create_vendor(
+        ctx.workspace["id"],
+        full_name=payload.full_name,
+        trade=payload.trade,
+        phone=payload.phone,
+        email=payload.email,
+        is_active=payload.is_active,
+        rating=payload.rating,
+        dispatch_priority=payload.dispatch_priority,
+    )
+
+
+@router.patch("/vendors/{vendor_id}")
+async def update_vendor_endpoint(
+    vendor_id: str,
+    payload: VendorUpdate,
+    ctx: AuthContext = Depends(require_auth),
+):
+    _ensure_vendor_in_workspace(ctx, vendor_id)
+    return update_vendor(
+        vendor_id,
+        full_name=payload.full_name,
+        trade=payload.trade,
+        phone=payload.phone,
+        email=payload.email,
+        is_active=payload.is_active,
+        rating=payload.rating,
+        dispatch_priority=payload.dispatch_priority,
     )
 
 

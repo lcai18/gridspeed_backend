@@ -156,6 +156,86 @@ def list_users(workspace_id: str) -> list[dict]:
 
 
 # ----------------------------
+# Vendors (external dispatch contacts)
+# ----------------------------
+
+def create_vendor(
+    workspace_id: str,
+    *,
+    full_name: str | None = None,
+    trade: str | None = None,
+    phone: str | None = None,
+    email: str | None = None,
+    is_active: bool = True,
+    rating: float | None = None,
+    dispatch_priority: int | None = None,
+) -> dict:
+    sb = get_supabase()
+    payload = {
+        "workspace_id": workspace_id,
+        "full_name": full_name,
+        "trade": trade,
+        "phone": phone,
+        "email": email,
+        "is_active": is_active,
+        "rating": rating,
+        "dispatch_priority": dispatch_priority,
+    }
+    resp = sb.table("vendors").insert(payload).execute()
+    return _expect_single(resp, context="create_vendor")
+
+
+def get_vendor(vendor_id: str) -> dict | None:
+    sb = get_supabase()
+    resp = sb.table("vendors").select("*").eq("id", vendor_id).limit(1).execute()
+    return _maybe_single(resp)
+
+
+def list_vendors(
+    workspace_id: str,
+    *,
+    trade: str | None = None,
+    is_active: bool | None = None,
+) -> list[dict]:
+    sb = get_supabase()
+    q = sb.table("vendors").select("*").eq("workspace_id", workspace_id)
+    if trade:
+        q = q.eq("trade", trade)
+    if is_active is not None:
+        q = q.eq("is_active", is_active)
+    resp = q.order("dispatch_priority", desc=False).order("created_at", desc=False).execute()
+    return resp.data or []
+
+
+def update_vendor(
+    vendor_id: str,
+    *,
+    full_name: str | None = None,
+    trade: str | None = None,
+    phone: str | None = None,
+    email: str | None = None,
+    is_active: bool | None = None,
+    rating: float | None = None,
+    dispatch_priority: int | None = None,
+) -> dict:
+    payload = {
+        "full_name": full_name,
+        "trade": trade,
+        "phone": phone,
+        "email": email,
+        "is_active": is_active,
+        "rating": rating,
+        "dispatch_priority": dispatch_priority,
+    }
+    updates = {k: v for k, v in payload.items() if v is not None}
+    if not updates:
+        return get_vendor(vendor_id) or {}
+    sb = get_supabase()
+    resp = sb.table("vendors").update(updates).eq("id", vendor_id).execute()
+    return _expect_single(resp, context="update_vendor")
+
+
+# ----------------------------
 # Pending accounts (waitlist/invites)
 # ----------------------------
 

@@ -23,7 +23,7 @@ create table if not exists workspaces (
 );
 
 -- -----------------------------
--- Users
+-- Users (internal staff + residents only; vendors live in vendors table)
 -- -----------------------------
 create table if not exists users (
   id uuid primary key default gen_random_uuid(),
@@ -47,6 +47,31 @@ create unique index if not exists users_workspace_email_uniq
 
 create index if not exists idx_users_workspace on users(workspace_id);
 create index if not exists idx_users_auth_user_id on users(auth_user_id);
+
+-- -----------------------------
+-- Vendors
+-- -----------------------------
+create table if not exists vendors (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+
+  full_name text,
+  trade text,
+  phone text,
+  email text,
+  is_active boolean not null default true,
+  rating numeric,
+  dispatch_priority integer,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_vendors_workspace_trade_active
+  on vendors(workspace_id, trade, is_active);
+
+create index if not exists idx_vendors_workspace_active
+  on vendors(workspace_id, is_active);
 
 -- -----------------------------
 -- Pending accounts
@@ -261,6 +286,16 @@ alter table workspaces       add column if not exists updated_at timestamptz not
 alter table users            add column if not exists created_at timestamptz not null default now();
 alter table users            add column if not exists updated_at timestamptz not null default now();
 
+alter table vendors          add column if not exists created_at timestamptz not null default now();
+alter table vendors          add column if not exists updated_at timestamptz not null default now();
+alter table vendors          add column if not exists full_name text;
+alter table vendors          add column if not exists trade text;
+alter table vendors          add column if not exists phone text;
+alter table vendors          add column if not exists email text;
+alter table vendors          add column if not exists is_active boolean not null default true;
+alter table vendors          add column if not exists rating numeric;
+alter table vendors          add column if not exists dispatch_priority integer;
+
 alter table pending_accounts add column if not exists created_at timestamptz not null default now();
 alter table pending_accounts add column if not exists updated_at timestamptz not null default now();
 
@@ -316,6 +351,7 @@ begin
   foreach t in array array[
     'workspaces',
     'users',
+    'vendors',
     'pending_accounts',
     'properties',
     'units',
