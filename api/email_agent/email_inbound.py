@@ -18,6 +18,7 @@ from api.supabase.db_helpers import (
     SupabaseError,
     update_message_raw_payload,
     update_work_order,
+    create_recommended_dispatches_for_work_order,
 )
 import traceback
 import io
@@ -307,7 +308,7 @@ async def inbound_email(request: Request):
         )
 
         priority = ai_result.get("severity")
-        update_work_order(
+        updated_work_order = update_work_order(
             work_order_id,
             priority=priority,
             issue_category=ai_result.get("issue_category"),
@@ -318,7 +319,11 @@ async def inbound_email(request: Request):
             summary=ai_result.get("summary"),
         )
 
-        return {"status": "ok"}
+        dispatches_created = []
+        if (updated_work_order.get("dispatch_recommendation") or "").lower() == "yes":
+            dispatches_created = create_recommended_dispatches_for_work_order(work_order_id)
+
+        return {"status": "ok", "dispatches_created_count": len(dispatches_created)}
     
     except HTTPException:
         raise

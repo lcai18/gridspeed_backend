@@ -54,11 +54,15 @@ from api.supabase.db_helpers import (
     list_units_table_rows,
     list_units,
     list_users,
+    list_work_order_dispatches,
     list_work_orders,
     update_property,
     update_unit,
     update_vendor,
     update_work_order,
+    update_work_order_dispatch,
+    assign_work_order_vendor,
+    get_work_order_dispatch,
 )
 
 router = APIRouter()
@@ -278,6 +282,18 @@ class WorkOrderUpdate(BaseModel):
     dispatch_recommendation: str | None = None
     likely_trade: str | None = None
     summary: str | None = None
+
+
+class WorkOrderDispatchAssign(BaseModel):
+    vendor_id: str
+    scheduled_at: datetime | None = None
+    notes: str | None = None
+
+
+class WorkOrderDispatchUpdate(BaseModel):
+    status: str | None = None
+    scheduled_at: datetime | None = None
+    notes: str | None = None
 
 
 class ConversationCreate(BaseModel):
@@ -620,6 +636,74 @@ async def update_work_order_endpoint(
         dispatch_recommendation=payload.dispatch_recommendation,
         likely_trade=payload.likely_trade,
         summary=payload.summary,
+    )
+
+
+@router.get("/work-orders/{work_order_id}/dispatches")
+async def list_work_order_dispatches_endpoint(
+    work_order_id: str,
+    ctx: AuthContext = Depends(require_auth),
+):
+    _ensure_work_order_in_workspace(ctx, work_order_id)
+    return list_work_order_dispatches(work_order_id)
+
+
+@router.post("/work-orders/{work_order_id}/dispatches/assign")
+async def assign_work_order_dispatch_endpoint(
+    work_order_id: str,
+    payload: WorkOrderDispatchAssign,
+    ctx: AuthContext = Depends(require_auth),
+):
+    _ensure_work_order_in_workspace(ctx, work_order_id)
+    _ensure_vendor_in_workspace(ctx, payload.vendor_id)
+    return assign_work_order_vendor(
+        work_order_id,
+        vendor_id=payload.vendor_id,
+        scheduled_at=payload.scheduled_at,
+        notes=payload.notes,
+        reassign=False,
+    )
+
+
+@router.post("/work-orders/{work_order_id}/dispatches/reassign")
+async def reassign_work_order_dispatch_endpoint(
+    work_order_id: str,
+    payload: WorkOrderDispatchAssign,
+    ctx: AuthContext = Depends(require_auth),
+):
+    _ensure_work_order_in_workspace(ctx, work_order_id)
+    _ensure_vendor_in_workspace(ctx, payload.vendor_id)
+    return assign_work_order_vendor(
+        work_order_id,
+        vendor_id=payload.vendor_id,
+        scheduled_at=payload.scheduled_at,
+        notes=payload.notes,
+        reassign=True,
+    )
+
+
+@router.patch("/work-orders/{work_order_id}/dispatches/{dispatch_id}")
+async def update_work_order_dispatch_endpoint(
+    work_order_id: str,
+    dispatch_id: str,
+    payload: WorkOrderDispatchUpdate,
+    ctx: AuthContext = Depends(require_auth),
+):
+    _ensure_work_order_in_workspace(ctx, work_order_id)
+    dispatch = get_work_order_dispatch(dispatch_id)
+    if dispatch is None:
+        raise HTTPException(status_code=404, detail="Dispatch record not found")
+    if dispatch.get("work_order_id") != work_order_id:
+        raise HTTPException(status_code=400, detail="Dispatch record does not belong to this work order")
+
+    if dispatch.get("vendor_id"):
+        _ensure_vendor_in_workspace(ctx, dispatch["vendor_id"])
+
+    return update_work_order_dispatch(
+        dispatch_id,
+        status=payload.status,
+        scheduled_at=payload.scheduled_at,
+        notes=payload.notes,
     )
 
 

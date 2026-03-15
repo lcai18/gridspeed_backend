@@ -236,6 +236,169 @@ def update_vendor(
 
 
 # ----------------------------
+# Work order dispatches
+# ----------------------------
+
+WORK_ORDER_DISPATCH_ACTIVE_STATUSES = ("recommended", "assigned", "contacted", "accepted")
+
+
+def get_candidate_vendors_for_work_order(work_order_id: str, *, limit: int = 5) -> list[dict]:
+    sb = get_supabase()
+    wo_resp = (
+        sb.table("work_orders")
+        .select("id, likely_trade, property_id, properties!inner(workspace_id)")
+        .eq("id", work_order_id)
+        .limit(1)
+        .execute()
+    )
+    wo = _maybe_single(wo_resp)
+    if not wo:
+        return []
+
+    properties = wo.get("properties") or {}
+    workspace_id = properties.get("workspace_id")
+    if not workspace_id:
+        return []
+
+    likely_trade = (wo.get("likely_trade") or "").strip()
+
+    q = sb.table("vendors").select("*").eq("workspace_id", workspace_id).eq("is_active", True)
+    if likely_trade:
+        q = q.ilike("trade", likely_trade)
+    resp = q.order("dispatch_priority", desc=False).order("created_at", desc=False).limit(limit).execute()
+    rows = resp.data or []
+
+    if rows or not likely_trade:
+        return rows
+
+    fallback = (
+        sb.table("vendors")
+        .select("*")
+        .eq("workspace_id", workspace_id)
+        .eq("is_active", True)
+        .order("dispatch_priority", desc=False)
+        .order("created_at", desc=False)
+        .limit(limit)
+        .execute()
+    )
+    return fallback.data or []
+
+
+def create_work_order_dispatch(
+    work_order_id: str,
+    *,
+    vendor_id: str,
+    status: str = "recommended",
+    scheduled_at: datetime | None = None,
+    notes: str | None = None,
+) -> dict:
+    sb = get_supabase()
+    payload = {
+        "work_order_id": work_order_id,
+        "vendor_id": vendor_id,
+        "status": status,
+        "scheduled_at": scheduled_at.isoformat() if isinstance(scheduled_at, datetime) else scheduled_at,
+        "notes": notes,
+    }
+    resp = sb.table("work_order_dispatches").insert(payload).execute()
+    return _expect_single(resp, context="create_work_order_dispatch")
+
+
+def get_work_order_dispatch(dispatch_id: str) -> dict | None:
+    sb = get_supabase()
+    resp = sb.table("work_order_dispatches").select("*").eq("id", dispatch_id).limit(1).execute()
+    return _maybe_single(resp)
+
+
+def list_work_order_dispatches(work_order_id: str) -> list[dict]:
+    sb = get_supabase()
+    resp = (
+        sb.table("work_order_dispatches")
+        .select("*")
+        .eq("work_order_id", work_order_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return resp.data or []
+
+
+def update_work_order_dispatch(
+    dispatch_id: str,
+    *,
+    status: str | None = None,
+    scheduled_at: datetime | None = None,
+    notes: str | None = None,
+) -> dict:
+    payload = {
+        "status": status,
+        "scheduled_at": scheduled_at.isoformat() if isinstance(scheduled_at, datetime) else scheduled_at,
+        "notes": notes,
+    }
+    updates = {k: v for k, v in payload.items() if v is not None}
+    if not updates:
+        return get_work_order_dispatch(dispatch_id) or {}
+
+    sb = get_supabase()
+    resp = sb.table("work_order_dispatches").update(updates).eq("id", dispatch_id).execute()
+    return _expect_single(resp, context="update_work_order_dispatch")
+
+
+def create_recommended_dispatches_for_work_order(work_order_id: str, *, limit: int = 3) -> list[dict]:
+    candidates = get_candidate_vendors_for_work_order(work_order_id, limit=limit)
+    if not candidates:
+        return []
+
+    existing = list_work_order_dispatches(work_order_id)
+    existing_vendor_ids = {
+        row.get("vendor_id")
+        for row in existing
+        if row.get("vendor_id") and row.get("status") in WORK_ORDER_DISPATCH_ACTIVE_STATUSES
+    }
+
+    created: list[dict] = []
+    for vendor in candidates:
+        vendor_id = vendor.get("id")
+        if not vendor_id or vendor_id in existing_vendor_ids:
+            continue
+        created.append(
+            create_work_order_dispatch(
+                work_order_id,
+                vendor_id=vendor_id,
+                status="recommended",
+                notes="Auto-recommended from likely_trade/workspace scope.",
+            )
+        )
+    return created
+
+
+def assign_work_order_vendor(
+    work_order_id: str,
+    *,
+    vendor_id: str,
+    scheduled_at: datetime | None = None,
+    notes: str | None = None,
+    reassign: bool = False,
+) -> dict:
+    if reassign:
+        existing = list_work_order_dispatches(work_order_id)
+        for row in existing:
+            if row.get("status") in ("assigned", "contacted", "accepted"):
+                update_work_order_dispatch(
+                    row["id"],
+                    status="canceled",
+                    notes=(row.get("notes") or "") + " Reassigned to a different vendor.",
+                )
+
+    return create_work_order_dispatch(
+        work_order_id,
+        vendor_id=vendor_id,
+        status="assigned",
+        scheduled_at=scheduled_at,
+        notes=notes,
+    )
+
+
+# ----------------------------
 # Pending accounts (waitlist/invites)
 # ----------------------------
 

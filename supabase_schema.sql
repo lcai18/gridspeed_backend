@@ -198,6 +198,30 @@ create index if not exists idx_work_orders_reported_by
   on work_orders (reported_by_user_id);
 
 -- -----------------------------
+-- Work order dispatches
+-- -----------------------------
+create table if not exists work_order_dispatches (
+  id uuid primary key default gen_random_uuid(),
+  work_order_id uuid not null references work_orders(id) on delete cascade,
+  vendor_id uuid not null references vendors(id) on delete restrict,
+  status text not null default 'recommended', -- recommended | assigned | contacted | accepted | declined | completed | canceled
+  scheduled_at timestamptz,
+  notes text,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+
+  constraint work_order_dispatches_status_chk
+    check (status in ('recommended', 'assigned', 'contacted', 'accepted', 'declined', 'completed', 'canceled'))
+);
+
+create index if not exists idx_work_order_dispatches_work_order_created
+  on work_order_dispatches (work_order_id, created_at desc);
+
+create index if not exists idx_work_order_dispatches_vendor_created
+  on work_order_dispatches (vendor_id, created_at desc);
+
+-- -----------------------------
 -- Conversations
 -- -----------------------------
 create table if not exists conversations (
@@ -318,6 +342,11 @@ alter table work_orders      add column if not exists dispatch_recommendation te
 alter table work_orders      add column if not exists likely_trade text;
 alter table work_orders      add column if not exists summary text;
 
+alter table work_order_dispatches add column if not exists created_at timestamptz not null default now();
+alter table work_order_dispatches add column if not exists updated_at timestamptz not null default now();
+alter table work_order_dispatches add column if not exists scheduled_at timestamptz;
+alter table work_order_dispatches add column if not exists notes text;
+
 alter table conversations    add column if not exists created_at timestamptz not null default now();
 alter table conversations    add column if not exists updated_at timestamptz not null default now();
 
@@ -357,6 +386,7 @@ begin
     'units',
     'occupancies',
     'work_orders',
+    'work_order_dispatches',
     'conversations',
     'messages',
     'media_assets'
