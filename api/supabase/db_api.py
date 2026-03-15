@@ -226,6 +226,12 @@ class WorkOrderCreate(BaseModel):
     description: str | None = None
     priority: str | None = None
     status: str | None = None
+    issue_category: str | None = None
+    severity: str | None = None
+    needs_more_info: bool | None = None
+    dispatch_recommendation: str | None = None
+    likely_trade: str | None = None
+    summary: str | None = None
 
 
 class WorkOrderUpdate(BaseModel):
@@ -233,6 +239,12 @@ class WorkOrderUpdate(BaseModel):
     description: str | None = None
     priority: str | None = None
     status: str | None = None
+    issue_category: str | None = None
+    severity: str | None = None
+    needs_more_info: bool | None = None
+    dispatch_recommendation: str | None = None
+    likely_trade: str | None = None
+    summary: str | None = None
 
 
 class ConversationCreate(BaseModel):
@@ -496,6 +508,12 @@ async def create_work_order_endpoint(payload: WorkOrderCreate, ctx: AuthContext 
         description=payload.description,
         priority=payload.priority,
         status=payload.status or "new",
+        issue_category=payload.issue_category,
+        severity=payload.severity,
+        needs_more_info=payload.needs_more_info,
+        dispatch_recommendation=payload.dispatch_recommendation,
+        likely_trade=payload.likely_trade,
+        summary=payload.summary,
     )
 
 
@@ -517,6 +535,12 @@ async def update_work_order_endpoint(
         description=payload.description,
         priority=payload.priority,
         status=payload.status,
+        issue_category=payload.issue_category,
+        severity=payload.severity,
+        needs_more_info=payload.needs_more_info,
+        dispatch_recommendation=payload.dispatch_recommendation,
+        likely_trade=payload.likely_trade,
+        summary=payload.summary,
     )
 
 

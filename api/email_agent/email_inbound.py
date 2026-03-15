@@ -303,14 +303,20 @@ async def inbound_email(request: Request):
                 "external_message_id": ai_message_id,
                 "in_reply_to": message_id,
                 "references": in_reply_to or message_id,
-                "issue_category": ai_result["issue_category"],
-                "severity": ai_result["severity"],
             },
         )
 
         priority = ai_result.get("severity")
-        if priority:
-            update_work_order(work_order_id, priority=priority)
+        update_work_order(
+            work_order_id,
+            priority=priority,
+            issue_category=ai_result.get("issue_category"),
+            severity=ai_result.get("severity"),
+            needs_more_info=ai_result.get("needs_more_info"),
+            dispatch_recommendation=ai_result.get("dispatch_recommendation"),
+            likely_trade=ai_result.get("likely_trade"),
+            summary=ai_result.get("summary"),
+        )
 
         return {"status": "ok"}
     

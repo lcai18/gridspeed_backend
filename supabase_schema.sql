@@ -152,6 +152,13 @@ create table if not exists work_orders (
   priority text, -- low | med | high | urgent
   status text not null default 'new', -- new | triaged | in_progress | waiting | done | canceled
 
+  issue_category text,
+  severity text,
+  needs_more_info boolean,
+  dispatch_recommendation text,
+  likely_trade text,
+  summary text,
+
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -269,6 +276,12 @@ alter table occupancies      add column if not exists updated_at timestamptz not
 
 alter table work_orders      add column if not exists created_at timestamptz not null default now();
 alter table work_orders      add column if not exists updated_at timestamptz not null default now();
+alter table work_orders      add column if not exists issue_category text;
+alter table work_orders      add column if not exists severity text;
+alter table work_orders      add column if not exists needs_more_info boolean;
+alter table work_orders      add column if not exists dispatch_recommendation text;
+alter table work_orders      add column if not exists likely_trade text;
+alter table work_orders      add column if not exists summary text;
 
 alter table conversations    add column if not exists created_at timestamptz not null default now();
 alter table conversations    add column if not exists updated_at timestamptz not null default now();

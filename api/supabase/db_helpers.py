@@ -496,6 +496,12 @@ def create_work_order(
     description: str | None = None,
     priority: str | None = None,
     status: str = "new",
+    issue_category: str | None = None,
+    severity: str | None = None,
+    needs_more_info: bool | None = None,
+    dispatch_recommendation: str | None = None,
+    likely_trade: str | None = None,
+    summary: str | None = None,
 ) -> dict:
     sb = get_supabase()
     payload = {
@@ -506,6 +512,12 @@ def create_work_order(
         "description": description,
         "priority": priority,
         "status": status,
+        "issue_category": issue_category,
+        "severity": severity,
+        "needs_more_info": needs_more_info,
+        "dispatch_recommendation": dispatch_recommendation,
+        "likely_trade": likely_trade,
+        "summary": summary,
     }
     resp = sb.table("work_orders").insert(payload).execute()
     return _expect_single(resp, context="create_work_order")
@@ -524,12 +536,24 @@ def update_work_order(
     description: str | None = None,
     priority: str | None = None,
     status: str | None = None,
+    issue_category: str | None = None,
+    severity: str | None = None,
+    needs_more_info: bool | None = None,
+    dispatch_recommendation: str | None = None,
+    likely_trade: str | None = None,
+    summary: str | None = None,
 ) -> dict:
     payload = {
         "title": title,
         "description": description,
         "priority": priority,
         "status": status,
+        "issue_category": issue_category,
+        "severity": severity,
+        "needs_more_info": needs_more_info,
+        "dispatch_recommendation": dispatch_recommendation,
+        "likely_trade": likely_trade,
+        "summary": summary,
     }
     updates = {k: v for k, v in payload.items() if v is not None}
     if not updates:
