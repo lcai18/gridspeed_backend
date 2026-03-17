@@ -159,6 +159,7 @@ def list_users(workspace_id: str) -> list[dict]:
 # Vendors (external dispatch contacts)
 # ----------------------------
 
+# TODO: Rating not set yet 
 def create_vendor(
     workspace_id: str,
     *,
@@ -169,6 +170,7 @@ def create_vendor(
     is_active: bool = True,
     rating: float | None = None,
     dispatch_priority: int | None = None,
+    service_zip_codes: list[str] | None = None,
 ) -> dict:
     sb = get_supabase()
     payload = {
@@ -182,13 +184,36 @@ def create_vendor(
         "dispatch_priority": dispatch_priority,
     }
     resp = sb.table("vendors").insert(payload).execute()
-    return _expect_single(resp, context="create_vendor")
+    vendor = _expect_single(resp, context="create_vendor")
+
+    zip_codes = sorted({z.strip() for z in (service_zip_codes or []) if isinstance(z, str) and z.strip()})
+    if zip_codes:
+        area_rows = [
+            {"workspace_id": workspace_id, "vendor_id": vendor["id"], "zip_code": zip_code}
+            for zip_code in zip_codes
+        ]
+        sb.table("vendor_service_areas").insert(area_rows).execute()
+
+    vendor["service_zip_codes"] = zip_codes
+    return vendor
 
 
 def get_vendor(vendor_id: str) -> dict | None:
     sb = get_supabase()
     resp = sb.table("vendors").select("*").eq("id", vendor_id).limit(1).execute()
-    return _maybe_single(resp)
+    vendor = _maybe_single(resp)
+    if not vendor:
+        return None
+
+    area_resp = (
+        sb.table("vendor_service_areas")
+        .select("zip_code")
+        .eq("vendor_id", vendor_id)
+        .order("zip_code", desc=False)
+        .execute()
+    )
+    vendor["service_zip_codes"] = [row.get("zip_code") for row in (area_resp.data or []) if row.get("zip_code")]
+    return vendor
 
 
 def list_vendors(
@@ -196,6 +221,7 @@ def list_vendors(
     *,
     trade: str | None = None,
     is_active: bool | None = None,
+    zip_code: str | None = None,
 ) -> list[dict]:
     sb = get_supabase()
     q = sb.table("vendors").select("*").eq("workspace_id", workspace_id)
@@ -203,8 +229,41 @@ def list_vendors(
         q = q.eq("trade", trade)
     if is_active is not None:
         q = q.eq("is_active", is_active)
+
+    if zip_code and zip_code.strip():
+        area_resp = (
+            sb.table("vendor_service_areas")
+            .select("vendor_id")
+            .eq("workspace_id", workspace_id)
+            .eq("zip_code", zip_code.strip())
+            .execute()
+        )
+        vendor_ids = {row.get("vendor_id") for row in (area_resp.data or []) if row.get("vendor_id")}
+        if not vendor_ids:
+            return []
+        q = q.in_("id", list(vendor_ids))
+
     resp = q.order("dispatch_priority", desc=False).order("created_at", desc=False).execute()
-    return resp.data or []
+    rows = resp.data or []
+
+    area_resp = (
+        sb.table("vendor_service_areas")
+        .select("vendor_id, zip_code")
+        .eq("workspace_id", workspace_id)
+        .execute()
+    )
+    by_vendor: dict[str, list[str]] = {}
+    for row in area_resp.data or []:
+        vendor_id = row.get("vendor_id")
+        vendor_zip = row.get("zip_code")
+        if not vendor_id or not vendor_zip:
+            continue
+        by_vendor.setdefault(vendor_id, []).append(vendor_zip)
+
+    for row in rows:
+        row["service_zip_codes"] = sorted(set(by_vendor.get(row.get("id"), [])))
+
+    return rows
 
 
 def update_vendor(
@@ -217,6 +276,7 @@ def update_vendor(
     is_active: bool | None = None,
     rating: float | None = None,
     dispatch_priority: int | None = None,
+    service_zip_codes: list[str] | None = None,
 ) -> dict:
     payload = {
         "full_name": full_name,
@@ -228,11 +288,25 @@ def update_vendor(
         "dispatch_priority": dispatch_priority,
     }
     updates = {k: v for k, v in payload.items() if v is not None}
-    if not updates:
-        return get_vendor(vendor_id) or {}
     sb = get_supabase()
-    resp = sb.table("vendors").update(updates).eq("id", vendor_id).execute()
-    return _expect_single(resp, context="update_vendor")
+
+    if updates:
+        sb.table("vendors").update(updates).eq("id", vendor_id).execute()
+
+    if service_zip_codes is not None:
+        vendor = get_vendor(vendor_id)
+        if vendor:
+            workspace_id = vendor.get("workspace_id")
+            if workspace_id:
+                sb.table("vendor_service_areas").delete().eq("vendor_id", vendor_id).execute()
+                zip_codes = sorted({z.strip() for z in service_zip_codes if isinstance(z, str) and z.strip()})
+                if zip_codes:
+                    sb.table("vendor_service_areas").insert([
+                        {"workspace_id": workspace_id, "vendor_id": vendor_id, "zip_code": zip_code}
+                        for zip_code in zip_codes
+                    ]).execute()
+
+    return get_vendor(vendor_id) or {}
 
 
 # ----------------------------
@@ -246,7 +320,7 @@ def get_candidate_vendors_for_work_order(work_order_id: str, *, limit: int = 5) 
     sb = get_supabase()
     wo_resp = (
         sb.table("work_orders")
-        .select("id, likely_trade, property_id, properties!inner(workspace_id)")
+        .select("id, likely_trade, property_id, properties!inner(workspace_id, zip_code)")
         .eq("id", work_order_id)
         .limit(1)
         .execute()
@@ -261,12 +335,25 @@ def get_candidate_vendors_for_work_order(work_order_id: str, *, limit: int = 5) 
         return []
 
     likely_trade = (wo.get("likely_trade") or "").strip()
+    property_zip_code = (properties.get("zip_code") or "").strip()
 
     q = sb.table("vendors").select("*").eq("workspace_id", workspace_id).eq("is_active", True)
     if likely_trade:
         q = q.ilike("trade", likely_trade)
     resp = q.order("dispatch_priority", desc=False).order("created_at", desc=False).limit(limit).execute()
     rows = resp.data or []
+
+    if property_zip_code:
+        area_resp = (
+            sb.table("vendor_service_areas")
+            .select("vendor_id")
+            .eq("workspace_id", workspace_id)
+            .eq("zip_code", property_zip_code)
+            .execute()
+        )
+        vendor_ids = {row.get("vendor_id") for row in (area_resp.data or []) if row.get("vendor_id")}
+        if vendor_ids:
+            rows = [row for row in rows if row.get("id") in vendor_ids]
 
     if rows or not likely_trade:
         return rows
@@ -281,7 +368,21 @@ def get_candidate_vendors_for_work_order(work_order_id: str, *, limit: int = 5) 
         .limit(limit)
         .execute()
     )
-    return fallback.data or []
+    fallback_rows = fallback.data or []
+
+    if property_zip_code:
+        area_resp = (
+            sb.table("vendor_service_areas")
+            .select("vendor_id")
+            .eq("workspace_id", workspace_id)
+            .eq("zip_code", property_zip_code)
+            .execute()
+        )
+        vendor_ids = {row.get("vendor_id") for row in (area_resp.data or []) if row.get("vendor_id")}
+        if vendor_ids:
+            fallback_rows = [row for row in fallback_rows if row.get("id") in vendor_ids]
+
+    return fallback_rows
 
 
 def create_work_order_dispatch(
@@ -530,7 +631,7 @@ def generate_magic_link(email: str, redirect_to: str | None = None) -> str:
     if redirect_to:
         payload['options'] = {"redirect_to": redirect_to}
     resp = sb.auth.admin.generate_link(payload)
-    
+
     data = getattr(resp, "data", None) or resp
     action_link = getattr(getattr(data, "properties", None), "action_link", None)
     if not action_link:

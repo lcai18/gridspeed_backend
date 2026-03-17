@@ -73,6 +73,23 @@ create index if not exists idx_vendors_workspace_trade_active
 create index if not exists idx_vendors_workspace_active
   on vendors(workspace_id, is_active);
 
+-- Zip-level service coverage for vendors inside a workspace
+create table if not exists vendor_service_areas (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  vendor_id uuid not null references vendors(id) on delete cascade,
+  zip_code text not null,
+  created_at timestamptz not null default now(),
+
+  unique (workspace_id, vendor_id, zip_code)
+);
+
+create index if not exists idx_vendor_service_areas_workspace_zip
+  on vendor_service_areas(workspace_id, zip_code);
+
+create index if not exists idx_vendor_service_areas_vendor
+  on vendor_service_areas(vendor_id);
+
 -- -----------------------------
 -- Pending accounts
 -- -----------------------------

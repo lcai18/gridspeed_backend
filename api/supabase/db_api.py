@@ -230,6 +230,7 @@ class VendorCreate(BaseModel):
     is_active: bool = True
     rating: float | None = None
     dispatch_priority: int | None = None
+    service_zip_codes: list[str] | None = None
 
 
 class VendorUpdate(BaseModel):
@@ -240,6 +241,7 @@ class VendorUpdate(BaseModel):
     is_active: bool | None = None
     rating: float | None = None
     dispatch_priority: int | None = None
+    service_zip_codes: list[str] | None = None
 
 
 class UnitCreate(BaseModel):
@@ -420,9 +422,10 @@ async def create_user_endpoint(payload: UserCreate, ctx: AuthContext = Depends(r
 async def list_vendors_endpoint(
     trade: str | None = None,
     is_active: bool | None = None,
+    zip_code: str | None = None,
     ctx: AuthContext = Depends(require_auth),
 ):
-    return list_vendors(ctx.workspace["id"], trade=trade, is_active=is_active)
+    return list_vendors(ctx.workspace["id"], trade=trade, is_active=is_active, zip_code=zip_code)
 
 
 @router.post("/vendors")
@@ -436,6 +439,7 @@ async def create_vendor_endpoint(payload: VendorCreate, ctx: AuthContext = Depen
         is_active=payload.is_active,
         rating=payload.rating,
         dispatch_priority=payload.dispatch_priority,
+        service_zip_codes=payload.service_zip_codes,
     )
 
 
@@ -455,6 +459,7 @@ async def update_vendor_endpoint(
         is_active=payload.is_active,
         rating=payload.rating,
         dispatch_priority=payload.dispatch_priority,
+        service_zip_codes=payload.service_zip_codes,
     )
 
 
