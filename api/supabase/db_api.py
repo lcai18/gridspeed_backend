@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 from datetime import timedelta, timezone, datetime
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -230,12 +230,11 @@ class VendorCreate(BaseModel):
     email: str | None = None
     is_active: bool = True
     rating: float | None = None
-    dispatch_priority: int | None = None
     base_address: str | None = None
-    base_lat: float | None = None
-    base_lng: float | None = None
     service_radius_miles: float | None = None
     auto_approve_cap: float | None = None
+    automated_calls: bool = False
+    contact_policy: Literal["business_hours", "24_7"] = "business_hours"
 
 
 class VendorUpdate(BaseModel):
@@ -245,12 +244,11 @@ class VendorUpdate(BaseModel):
     email: str | None = None
     is_active: bool | None = None
     rating: float | None = None
-    dispatch_priority: int | None = None
     base_address: str | None = None
-    base_lat: float | None = None
-    base_lng: float | None = None
     service_radius_miles: float | None = None
     auto_approve_cap: float | None = None
+    automated_calls: bool | None = None
+    contact_policy: Literal["business_hours", "24_7"] | None = None
 
 
 class UnitCreate(BaseModel):
@@ -478,6 +476,11 @@ async def list_vendors_endpoint(
 
 @router.post("/vendors")
 async def create_vendor_endpoint(payload: VendorCreate, ctx: AuthContext = Depends(require_auth)):
+    base_lat: float | None = None
+    base_lng: float | None = None
+    if payload.base_address and payload.base_address.strip():
+        base_lat, base_lng = await _geocode_address(payload.base_address.strip())
+
     return create_vendor(
         ctx.workspace["id"],
         full_name=payload.full_name,
@@ -486,12 +489,13 @@ async def create_vendor_endpoint(payload: VendorCreate, ctx: AuthContext = Depen
         email=payload.email,
         is_active=payload.is_active,
         rating=payload.rating,
-        dispatch_priority=payload.dispatch_priority,
         base_address=payload.base_address,
-        base_lat=payload.base_lat,
-        base_lng=payload.base_lng,
+        base_lat=base_lat,
+        base_lng=base_lng,
         service_radius_miles=payload.service_radius_miles,
         auto_approve_cap=payload.auto_approve_cap,
+        automated_calls=payload.automated_calls,
+        contact_policy=payload.contact_policy,
     )
 
 
@@ -502,6 +506,11 @@ async def update_vendor_endpoint(
     ctx: AuthContext = Depends(require_auth),
 ):
     _ensure_vendor_in_workspace(ctx, vendor_id)
+    base_lat: float | None = None
+    base_lng: float | None = None
+    if payload.base_address and payload.base_address.strip():
+        base_lat, base_lng = await _geocode_address(payload.base_address.strip())
+
     return update_vendor(
         vendor_id,
         full_name=payload.full_name,
@@ -510,12 +519,13 @@ async def update_vendor_endpoint(
         email=payload.email,
         is_active=payload.is_active,
         rating=payload.rating,
-        dispatch_priority=payload.dispatch_priority,
         base_address=payload.base_address,
-        base_lat=payload.base_lat,
-        base_lng=payload.base_lng,
+        base_lat=base_lat,
+        base_lng=base_lng,
         service_radius_miles=payload.service_radius_miles,
         auto_approve_cap=payload.auto_approve_cap,
+        automated_calls=payload.automated_calls,
+        contact_policy=payload.contact_policy,
     )
 
 

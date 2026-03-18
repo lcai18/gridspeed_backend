@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
 import time
 from typing import Any, Iterable
@@ -169,12 +170,13 @@ def create_vendor(
     email: str | None = None,
     is_active: bool = True,
     rating: float | None = None,
-    dispatch_priority: int | None = None,
     base_address: str | None = None,
     base_lat: float | None = None,
     base_lng: float | None = None,
     service_radius_miles: float | None = None,
     auto_approve_cap: float | None = None,
+    automated_calls: bool = False,
+    contact_policy: str = "business_hours",
 ) -> dict:
     sb = get_supabase()
     payload = {
@@ -185,12 +187,13 @@ def create_vendor(
         "email": email,
         "is_active": is_active,
         "rating": rating,
-        "dispatch_priority": dispatch_priority,
         "base_address": base_address,
         "base_lat": base_lat,
         "base_lng": base_lng,
         "service_radius_miles": service_radius_miles,
         "auto_approve_cap": auto_approve_cap,
+        "automated_calls": automated_calls,
+        "contact_policy": contact_policy,
     }
     resp = sb.table("vendors").insert(payload).execute()
     return _expect_single(resp, context="create_vendor")
@@ -215,7 +218,7 @@ def list_vendors(
     if is_active is not None:
         q = q.eq("is_active", is_active)
 
-    resp = q.order("dispatch_priority", desc=False).order("created_at", desc=False).execute()
+    resp = q.order("created_at", desc=False).execute()
     return resp.data or []
 
 
@@ -228,12 +231,13 @@ def update_vendor(
     email: str | None = None,
     is_active: bool | None = None,
     rating: float | None = None,
-    dispatch_priority: int | None = None,
     base_address: str | None = None,
     base_lat: float | None = None,
     base_lng: float | None = None,
     service_radius_miles: float | None = None,
     auto_approve_cap: float | None = None,
+    automated_calls: bool | None = None,
+    contact_policy: str | None = None,
 ) -> dict:
     payload = {
         "full_name": full_name,
@@ -242,12 +246,13 @@ def update_vendor(
         "email": email,
         "is_active": is_active,
         "rating": rating,
-        "dispatch_priority": dispatch_priority,
         "base_address": base_address,
         "base_lat": base_lat,
         "base_lng": base_lng,
         "service_radius_miles": service_radius_miles,
         "auto_approve_cap": auto_approve_cap,
+        "automated_calls": automated_calls,
+        "contact_policy": contact_policy,
     }
     updates = {k: v for k, v in payload.items() if v is not None}
     sb = get_supabase()
@@ -265,11 +270,70 @@ def update_vendor(
 WORK_ORDER_DISPATCH_ACTIVE_STATUSES = ("recommended", "assigned", "contacted", "accepted")
 
 
+def _coerce_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _haversine_miles(
+    lat1: float | None,
+    lng1: float | None,
+    lat2: float | None,
+    lng2: float | None,
+) -> float | None:
+    if None in (lat1, lng1, lat2, lng2):
+        return None
+
+    # Mean Earth radius in miles.
+    earth_radius_miles = 3958.8
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlng / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return earth_radius_miles * c
+
+
+def _rank_vendors_by_haversine(
+    vendors: list[dict],
+    *,
+    property_lat: float | None,
+    property_lng: float | None,
+    limit: int,
+) -> list[dict]:
+    ranked_rows: list[tuple[tuple[int, float, str], dict]] = []
+    for vendor in vendors:
+        vendor_lat = _coerce_float(vendor.get("base_lat"))
+        vendor_lng = _coerce_float(vendor.get("base_lng"))
+        distance_miles = _haversine_miles(property_lat, property_lng, vendor_lat, vendor_lng)
+        # Vendors missing coordinates sort last.
+        sort_key = (
+            1 if distance_miles is None else 0,
+            distance_miles if distance_miles is not None else float("inf"),
+            str(vendor.get("created_at") or ""),
+        )
+        row = dict(vendor)
+        row["distance_miles"] = distance_miles
+        ranked_rows.append((sort_key, row))
+
+    ranked_rows.sort(key=lambda item: item[0])
+    ranked = [row for _, row in ranked_rows[:limit]]
+    for idx, vendor in enumerate(ranked, start=1):
+        vendor["dispatch_priority"] = idx
+    return ranked
+
+
 def get_candidate_vendors_for_work_order(work_order_id: str, *, limit: int = 5) -> list[dict]:
     sb = get_supabase()
     wo_resp = (
         sb.table("work_orders")
-        .select("id, likely_trade, property_id, properties!inner(workspace_id, zip_code)")
+        .select("id, likely_trade, property_id, properties!inner(workspace_id, zip_code, lat, lng)")
         .eq("id", work_order_id)
         .limit(1)
         .execute()
@@ -282,30 +346,39 @@ def get_candidate_vendors_for_work_order(work_order_id: str, *, limit: int = 5) 
     workspace_id = properties.get("workspace_id")
     if not workspace_id:
         return []
+    property_lat = _coerce_float(properties.get("lat"))
+    property_lng = _coerce_float(properties.get("lng"))
 
     likely_trade = (wo.get("likely_trade") or "").strip()
     q = sb.table("vendors").select("*").eq("workspace_id", workspace_id).eq("is_active", True)
     if likely_trade:
         q = q.ilike("trade", likely_trade)
-    resp = q.order("dispatch_priority", desc=False).order("created_at", desc=False).limit(limit).execute()
+    resp = q.execute()
     rows = resp.data or []
 
     if rows or not likely_trade:
-        return rows
+        return _rank_vendors_by_haversine(
+            rows,
+            property_lat=property_lat,
+            property_lng=property_lng,
+            limit=limit,
+        )
 
     fallback = (
         sb.table("vendors")
         .select("*")
         .eq("workspace_id", workspace_id)
         .eq("is_active", True)
-        .order("dispatch_priority", desc=False)
-        .order("created_at", desc=False)
-        .limit(limit)
         .execute()
     )
     fallback_rows = fallback.data or []
 
-    return fallback_rows
+    return _rank_vendors_by_haversine(
+        fallback_rows,
+        property_lat=property_lat,
+        property_lng=property_lng,
+        limit=limit,
+    )
 
 
 def create_work_order_dispatch(

@@ -67,6 +67,9 @@ create table if not exists vendors (
   base_lng double precision,
   service_radius_miles numeric default 20,
   auto_approve_cap numeric,
+  automated_calls boolean not null default false,
+  contact_policy text not null default 'business_hours'
+    check (contact_policy in ('business_hours', '24_7')),
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -331,6 +334,11 @@ alter table vendors          add column if not exists base_lat double precision;
 alter table vendors          add column if not exists base_lng double precision;
 alter table vendors          add column if not exists service_radius_miles numeric;
 alter table vendors          add column if not exists auto_approve_cap numeric;
+alter table vendors          add column if not exists automated_calls boolean not null default false;
+alter table vendors          add column if not exists contact_policy text not null default 'business_hours';
+alter table vendors          drop constraint if exists vendors_contact_policy_check;
+alter table vendors          add constraint vendors_contact_policy_check
+  check (contact_policy in ('business_hours', '24_7'));
 alter table vendors          alter column service_radius_miles set default 20;
 
 alter table pending_accounts add column if not exists created_at timestamptz not null default now();
