@@ -62,6 +62,11 @@ create table if not exists vendors (
   is_active boolean not null default true,
   rating numeric,
   dispatch_priority integer,
+  base_address text,
+  base_lat double precision,
+  base_lng double precision,
+  service_radius_miles numeric default 20,
+  auto_approve_cap numeric,
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -72,23 +77,6 @@ create index if not exists idx_vendors_workspace_trade_active
 
 create index if not exists idx_vendors_workspace_active
   on vendors(workspace_id, is_active);
-
--- Zip-level service coverage for vendors inside a workspace
-create table if not exists vendor_service_areas (
-  id uuid primary key default gen_random_uuid(),
-  workspace_id uuid not null references workspaces(id) on delete cascade,
-  vendor_id uuid not null references vendors(id) on delete cascade,
-  zip_code text not null,
-  created_at timestamptz not null default now(),
-
-  unique (workspace_id, vendor_id, zip_code)
-);
-
-create index if not exists idx_vendor_service_areas_workspace_zip
-  on vendor_service_areas(workspace_id, zip_code);
-
-create index if not exists idx_vendor_service_areas_vendor
-  on vendor_service_areas(vendor_id);
 
 -- -----------------------------
 -- Pending accounts
@@ -128,6 +116,8 @@ create table if not exists properties (
 
   address text,
   zip_code text,
+  lat double precision,
+  lng double precision,
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -336,6 +326,12 @@ alter table vendors          add column if not exists email text;
 alter table vendors          add column if not exists is_active boolean not null default true;
 alter table vendors          add column if not exists rating numeric;
 alter table vendors          add column if not exists dispatch_priority integer;
+alter table vendors          add column if not exists base_address text;
+alter table vendors          add column if not exists base_lat double precision;
+alter table vendors          add column if not exists base_lng double precision;
+alter table vendors          add column if not exists service_radius_miles numeric;
+alter table vendors          add column if not exists auto_approve_cap numeric;
+alter table vendors          alter column service_radius_miles set default 20;
 
 alter table pending_accounts add column if not exists created_at timestamptz not null default now();
 alter table pending_accounts add column if not exists updated_at timestamptz not null default now();
@@ -343,6 +339,10 @@ alter table pending_accounts add column if not exists updated_at timestamptz not
 alter table properties       add column if not exists created_at timestamptz not null default now();
 alter table properties       add column if not exists updated_at timestamptz not null default now();
 alter table properties       add column if not exists zip_code text;
+alter table properties       add column if not exists lat double precision;
+alter table properties       add column if not exists lng double precision;
+
+drop table if exists vendor_service_areas;
 
 alter table units            add column if not exists created_at timestamptz not null default now();
 alter table units            add column if not exists updated_at timestamptz not null default now();

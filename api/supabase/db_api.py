@@ -5,6 +5,7 @@ import secrets
 from datetime import timedelta, timezone, datetime
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
@@ -230,7 +231,11 @@ class VendorCreate(BaseModel):
     is_active: bool = True
     rating: float | None = None
     dispatch_priority: int | None = None
-    service_zip_codes: list[str] | None = None
+    base_address: str | None = None
+    base_lat: float | None = None
+    base_lng: float | None = None
+    service_radius_miles: float | None = None
+    auto_approve_cap: float | None = None
 
 
 class VendorUpdate(BaseModel):
@@ -241,7 +246,11 @@ class VendorUpdate(BaseModel):
     is_active: bool | None = None
     rating: float | None = None
     dispatch_priority: int | None = None
-    service_zip_codes: list[str] | None = None
+    base_address: str | None = None
+    base_lat: float | None = None
+    base_lng: float | None = None
+    service_radius_miles: float | None = None
+    auto_approve_cap: float | None = None
 
 
 class UnitCreate(BaseModel):
@@ -251,6 +260,46 @@ class UnitCreate(BaseModel):
 class PropertyUpdate(BaseModel):
     address: str | None = None
     zip_code: str | None = None
+
+
+GEOCODE_MAPS_CO_SEARCH_URL = "https://geocode.maps.co/search"
+
+
+async def _geocode_address(address: str) -> tuple[float, float]:
+    api_key = os.getenv("GEOCODE_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GEOCODE_API_KEY is not configured")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                GEOCODE_MAPS_CO_SEARCH_URL,
+                params={"q": address, "api_key": api_key},
+            )
+            response.raise_for_status()
+            geocode_result = response.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"geocode.maps.co request failed: {exc}")
+
+    if not isinstance(geocode_result, list) or not geocode_result:
+        raise HTTPException(status_code=404, detail="No matching address found")
+
+    result = geocode_result[0]
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=502, detail="Unable to parse geocode.maps.co response")
+
+    lat_raw = result.get("lat")
+    lng_raw = result.get("lon")
+    if lat_raw is None or lng_raw is None:
+        raise HTTPException(status_code=502, detail="Unable to parse geocode.maps.co coordinates")
+
+    try:
+        lat = float(lat_raw)
+        lng = float(lng_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=502, detail="Unable to parse geocode.maps.co coordinates")
+
+    return lat, lng
 
 
 class UnitUpdate(BaseModel):
@@ -422,10 +471,9 @@ async def create_user_endpoint(payload: UserCreate, ctx: AuthContext = Depends(r
 async def list_vendors_endpoint(
     trade: str | None = None,
     is_active: bool | None = None,
-    zip_code: str | None = None,
     ctx: AuthContext = Depends(require_auth),
 ):
-    return list_vendors(ctx.workspace["id"], trade=trade, is_active=is_active, zip_code=zip_code)
+    return list_vendors(ctx.workspace["id"], trade=trade, is_active=is_active)
 
 
 @router.post("/vendors")
@@ -439,7 +487,11 @@ async def create_vendor_endpoint(payload: VendorCreate, ctx: AuthContext = Depen
         is_active=payload.is_active,
         rating=payload.rating,
         dispatch_priority=payload.dispatch_priority,
-        service_zip_codes=payload.service_zip_codes,
+        base_address=payload.base_address,
+        base_lat=payload.base_lat,
+        base_lng=payload.base_lng,
+        service_radius_miles=payload.service_radius_miles,
+        auto_approve_cap=payload.auto_approve_cap,
     )
 
 
@@ -459,7 +511,11 @@ async def update_vendor_endpoint(
         is_active=payload.is_active,
         rating=payload.rating,
         dispatch_priority=payload.dispatch_priority,
-        service_zip_codes=payload.service_zip_codes,
+        base_address=payload.base_address,
+        base_lat=payload.base_lat,
+        base_lng=payload.base_lng,
+        service_radius_miles=payload.service_radius_miles,
+        auto_approve_cap=payload.auto_approve_cap,
     )
 
 
@@ -482,10 +538,17 @@ async def list_property_zip_codes_endpoint(ctx: AuthContext = Depends(require_au
 
 @router.post("/properties")
 async def create_property_endpoint(payload: PropertyCreate, ctx: AuthContext = Depends(require_auth)):
+    lat: float | None = None
+    lng: float | None = None
+    if payload.address and payload.address.strip():
+        lat, lng = await _geocode_address(payload.address.strip())
+
     return create_property(
         ctx.workspace["id"],
         address=payload.address,
         zip_code=payload.zip_code,
+        lat=lat,
+        lng=lng,
     )
 
 
@@ -496,10 +559,17 @@ async def update_property_endpoint(
     ctx: AuthContext = Depends(require_auth),
 ):
     _ensure_property_in_workspace(ctx, property_id)
+    lat: float | None = None
+    lng: float | None = None
+    if payload.address and payload.address.strip():
+        lat, lng = await _geocode_address(payload.address.strip())
+
     return update_property(
         property_id,
         address=payload.address,
         zip_code=payload.zip_code,
+        lat=lat,
+        lng=lng,
     )
 
 
