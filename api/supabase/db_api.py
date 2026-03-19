@@ -28,6 +28,7 @@ from api.supabase.db_helpers import (
     create_vendor,
     delete_property,
     delete_users_by_ids,
+    delete_vendor,
     delete_work_orders_for_property,
     list_resident_user_ids_for_property,
     generate_magic_link,
@@ -280,6 +281,7 @@ async def _geocode_address(address: str) -> tuple[float, float]:
         raise HTTPException(status_code=502, detail=f"geocode.maps.co request failed: {exc}")
 
     if not isinstance(geocode_result, list) or not geocode_result:
+        print('cannot geocode')
         raise HTTPException(status_code=404, detail="No matching address found")
 
     result = geocode_result[0]
@@ -510,7 +512,7 @@ async def update_vendor_endpoint(
     base_lng: float | None = None
     if payload.base_address and payload.base_address.strip():
         base_lat, base_lng = await _geocode_address(payload.base_address.strip())
-
+    print("Geocoded")
     return update_vendor(
         vendor_id,
         full_name=payload.full_name,
@@ -527,7 +529,13 @@ async def update_vendor_endpoint(
         automated_calls=payload.automated_calls,
         contact_policy=payload.contact_policy,
     )
-
+@router.delete("/vendors/{vendor_id}")
+async def delete_vendor_endpoint(vendor_id: str, ctx: AuthContext = Depends(require_auth)):
+    _ensure_vendor_in_workspace(ctx, vendor_id)
+    deleted_vendor = delete_vendor(vendor_id)
+    if deleted_vendor is None:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    return {"deleted_vendor": deleted_vendor}
 
 # ----------------------------
 # Properties (workspace-scoped)
