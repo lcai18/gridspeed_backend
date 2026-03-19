@@ -259,7 +259,6 @@ def update_vendor(
 
     if updates:
         sb.table("vendors").update(updates).eq("id", vendor_id).execute()
-    print("updated")
     return get_vendor(vendor_id) or {}
 
 def delete_vendor(vendor_id: str) -> dict | None:
