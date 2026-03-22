@@ -260,42 +260,59 @@ class PropertyUpdate(BaseModel):
     zip_code: str | None = None
 
 
-GEOCODE_MAPS_CO_SEARCH_URL = "https://geocode.maps.co/search"
+GOOGLE_GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 
 
 async def _geocode_address(address: str) -> tuple[float, float]:
-    api_key = os.getenv("GEOCODE_API_KEY")
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=500, detail="GEOCODE_API_KEY is not configured")
+        raise HTTPException(status_code=500, detail="GOOGLE_MAPS_API_KEY is not configured")
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
-                GEOCODE_MAPS_CO_SEARCH_URL,
-                params={"q": address, "api_key": api_key},
+                GOOGLE_GEOCODE_URL,
+                params={"address": address, "key": api_key},
             )
             response.raise_for_status()
             geocode_result = response.json()
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"geocode.maps.co request failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Google Geocoding request failed: {exc}")
 
-    if not isinstance(geocode_result, list) or not geocode_result:
+    status = geocode_result.get("status")
+    if status != "OK":
+        if status == "ZERO_RESULTS":
+            raise HTTPException(status_code=404, detail="No matching address found")
+        error_message = geocode_result.get("error_message")
+        details = f"{status}: {error_message}" if error_message else str(status)
+        raise HTTPException(status_code=502, detail=f"Google Geocoding error: {details}")
+
+    results = geocode_result.get("results")
+    if not isinstance(results, list) or not results:
         raise HTTPException(status_code=404, detail="No matching address found")
 
-    result = geocode_result[0]
+    result = results[0]
     if not isinstance(result, dict):
-        raise HTTPException(status_code=502, detail="Unable to parse geocode.maps.co response")
+        raise HTTPException(status_code=502, detail="Unable to parse Google Geocoding response")
 
-    lat_raw = result.get("lat")
-    lng_raw = result.get("lon")
+    geometry = result.get("geometry")
+    if not isinstance(geometry, dict):
+        raise HTTPException(status_code=502, detail="Unable to parse Google Geocoding response")
+
+    location = geometry.get("location")
+    if not isinstance(location, dict):
+        raise HTTPException(status_code=502, detail="Unable to parse Google Geocoding coordinates")
+
+    lat_raw = location.get("lat")
+    lng_raw = location.get("lng")
     if lat_raw is None or lng_raw is None:
-        raise HTTPException(status_code=502, detail="Unable to parse geocode.maps.co coordinates")
+        raise HTTPException(status_code=502, detail="Unable to parse Google Geocoding coordinates")
 
     try:
         lat = float(lat_raw)
         lng = float(lng_raw)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=502, detail="Unable to parse geocode.maps.co coordinates")
+        raise HTTPException(status_code=502, detail="Unable to parse Google Geocoding coordinates")
 
     return lat, lng
 
