@@ -1,36 +1,49 @@
 import os
 from uuid import uuid4
+
+import httpx
 from dotenv import load_dotenv
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Email, To, Header
 
 load_dotenv()
 
-
-sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 FROM_EMAIL = os.getenv("FROM_EMAIL")
+RESEND_API_URL = "https://api.resend.com/emails"
+
 
 def send_email(to, subject, body, in_reply_to=None, references=None):
+    if not RESEND_API_KEY:
+        raise RuntimeError("RESEND_API_KEY is not configured")
+    if not FROM_EMAIL:
+        raise RuntimeError("FROM_EMAIL is not configured")
+
     message_id = f"<{uuid4()}@{FROM_EMAIL.split('@')[1]}>"
-    
-    message = Mail(
-        from_email=Email(FROM_EMAIL),
-        to_emails=To(to),
-        subject=subject,
-        plain_text_content=body
-    )
-    message.add_header(Header("Message-ID", message_id))
 
+    headers = {"Message-ID": message_id}
     if in_reply_to:
-        message.add_header(Header("In-Reply-To", in_reply_to))
-
+        headers["In-Reply-To"] = in_reply_to
     if references:
-        message.add_header(Header("References", references))
+        headers["References"] = references
 
-    resp = sg.send(message)
+    payload = {
+        "from": FROM_EMAIL,
+        "to": [to],
+        "subject": subject,
+        "text": body,
+        "headers": headers,
+    }
 
+    response = httpx.post(
+        RESEND_API_URL,
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=30.0,
+    )
 
-    if resp.status_code >= 400:
-        raise RuntimeError(f"SendGrid send failed: {resp.status_code}")
+    if response.status_code >= 400:
+        raise RuntimeError(f"Resend send failed: {response.status_code} {response.text}")
 
     return message_id

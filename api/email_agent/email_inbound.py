@@ -37,18 +37,84 @@ def extract_header(headers: str, key: str):
             return line.split(":", 1)[1].strip()
     return None
 
-def parse_sendgrid_webhook(body: bytes, content_type: str):
-    """Parse SendGrid inbound webhook manually to avoid size limits"""
+
+def fetch_resend_email_by_id(email_id: str):
+    api_key = os.getenv("RESEND_API_KEY")
+    if not api_key:
+        print("ERROR RESEND_API_KEY missing; cannot fetch inbound email by id")
+        return None
+    try:
+        import resend
+
+        resend.api_key = api_key
+        return resend.Emails.Receiving.get(email_id)
+    except Exception as e:
+        print(f"ERROR fetching resend email {email_id}: {e}")
+        return None
+
+def parse_inbound_webhook(body: bytes, content_type: str):
+    """Parse inbound webhook payloads from the email provider (JSON) or multipart providers."""
     import cgi
+    import json
     from email import message_from_bytes
     from email.policy import default
     
     print(f"Parsing webhook - body size: {len(body)}, content_type: {content_type}")
     
+    if "application/json" in (content_type or "").lower():
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except Exception as e:
+            print(f"ERROR parsing JSON payload: {e}")
+            return {"_attachments": []}
+        print(payload, "<-- Parsed JSON payload")
+        if not isinstance(payload, dict):
+            print("ERROR unsupported JSON payload shape")
+            return {"_attachments": []}
+
+        # JSON webhook path only supports fetching full email via API.
+        data = payload.get("data") or {}
+        email_id = payload.get("email_id") or data.get("email_id") or payload.get("id") or data.get("id")
+        if not email_id:
+            print("ERROR JSON payload missing email id")
+            return {"_attachments": []}
+        fetched_email = fetch_resend_email_by_id(email_id)
+        if not fetched_email:
+            return {"_attachments": []}
+        email_data = fetched_email.get("data", fetched_email)
+
+        headers = email_data.get("headers") or {}
+        if isinstance(headers, dict):
+            normalized_headers = []
+            for k, v in headers.items():
+                if isinstance(v, list):
+                    v = ", ".join(str(x) for x in v)
+                normalized_headers.append(f"{k}: {v}")
+            headers = "\n".join(normalized_headers)
+        elif not isinstance(headers, str):
+            headers = ""
+
+        # Some providers send canonical message ID at top-level as `message_id`.
+        # Add it to normalized headers so extract_header can find Message-ID.
+        message_id = email_data.get("message_id")
+        if message_id and "message-id:" not in headers.lower():
+            headers = f"{headers}\nMessage-ID: {message_id}".strip()
+
+        parsed = {
+            "from": email_data.get("from"),
+            "subject": email_data.get("subject"),
+            "text": email_data.get("text") or "",
+            "html": email_data.get("html") or "",
+            "headers": headers,
+            "_attachments": [],
+        }
+        print("Parsed JSON webhook payload")
+        return parsed
+
     environ = {
-        'REQUEST_METHOD': 'POST',
-        'CONTENT_TYPE': content_type,
-        'CONTENT_LENGTH': str(len(body))
+        "REQUEST_METHOD": "POST",
+        "CONTENT_TYPE": content_type,
+        "CONTENT_LENGTH": str(len(body)),
     }
     
     try:
@@ -138,7 +204,7 @@ async def inbound_email(request: Request):
         print(f"Content-Type: {content_type}")
         print(f"Body size: {len(body)} bytes")
         
-        form_data = parse_sendgrid_webhook(body, content_type)
+        form_data = parse_inbound_webhook(body, content_type)
         
         tenant_email = form_data.get("from")
         _, tenant_email = parseaddr(tenant_email or "")
