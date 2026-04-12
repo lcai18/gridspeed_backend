@@ -7,6 +7,7 @@ from uuid import uuid4
 from api.email_agent.ai import RECENT_TURNS_TO_KEEP, condense_rolling_summary, run_ai_agent
 from api.email_agent.email import send_email
 from api.supabase.image_storage import upload_image
+from api.voice_bot.rest_client import VoiceAgentError, trigger_dispatch_call
 from api.supabase.db_helpers import (
     create_conversation,
     create_message,
@@ -320,10 +321,36 @@ async def inbound_email(request: Request):
         )
 
         dispatches_created = []
+        voice_call = None
+        voice_call_error = None
         if (updated_work_order.get("dispatch_recommendation") or "").lower() == "yes":
             dispatches_created = create_recommended_dispatches_for_work_order(work_order_id)
+            dispatch_context = {
+                "subject": subject,
+                "tenant_email": tenant_email,
+                "work_order_summary": updated_work_order.get("summary"),
+                "likely_trade": updated_work_order.get("likely_trade"),
+                "priority": updated_work_order.get("priority"),
+                "severity": updated_work_order.get("severity"),
+                "issue_category": updated_work_order.get("issue_category"),
+                "dispatches": dispatches_created,
+            }
 
-        return {"status": "ok", "dispatches_created_count": len(dispatches_created)}
+            try:
+                voice_call = trigger_dispatch_call(
+                    work_order_id=work_order_id,
+                    dispatch_context=dispatch_context,
+                )
+            except VoiceAgentError as exc:
+                voice_call_error = str(exc)
+                print(f"Failed to trigger voice dispatch call: {voice_call_error}")
+
+        return {
+            "status": "ok",
+            "dispatches_created_count": len(dispatches_created),
+            "voice_call": voice_call,
+            "voice_call_error": voice_call_error,
+        }
     
     except HTTPException:
         raise

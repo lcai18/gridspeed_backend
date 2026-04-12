@@ -25,6 +25,8 @@ ELEVEN_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
+DEFAULT_TO_NUMBER = os.getenv("VOICE_DEFAULT_TO_NUMBER", "+14046443252")
+DEFAULT_FROM_NUMBER = os.getenv("VOICE_DEFAULT_FROM_NUMBER", "+18886444317")
 
 print(PUBLIC_BASE_URL)
 
@@ -38,6 +40,8 @@ LAST_CALL_SID: str | None = None
 CALL_SID_LOCK = asyncio.Lock()
 AUDIO_CACHE: dict[str, bytes] = {}
 AUDIO_CACHE_LOCK = asyncio.Lock()
+LAST_DISPATCH_CONTEXT: dict = {}
+DISPATCH_CONTEXT_LOCK = asyncio.Lock()
 
 
 @router.get("/supabase/health")
@@ -209,14 +213,50 @@ async def get_tts_audio(audio_id: str):
 # Outbound call trigger
 # ----------------------------
 @router.post("/call-me")
-async def call_me():
+async def call_me(request: Request):
+    payload = {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    to_number = payload.get("to") or DEFAULT_TO_NUMBER
+    from_number = payload.get("from") or DEFAULT_FROM_NUMBER
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    work_order_id = payload.get("work_order_id")
+
+    if not PUBLIC_BASE_URL:
+        raise HTTPException(status_code=500, detail="PUBLIC_BASE_URL is required to place calls")
+
+    async with DISPATCH_CONTEXT_LOCK:
+        LAST_DISPATCH_CONTEXT.clear()
+        LAST_DISPATCH_CONTEXT.update({
+            "work_order_id": work_order_id,
+            "context": context,
+        })
+
     call = twilio_client.calls.create(
-        to="+14046443252",
-        from_="+18886444317",
+        to=to_number,
+        from_=from_number,
         url=f"{PUBLIC_BASE_URL}/voice",
     )
     print("Outbound call initiated. SID:", call.sid)
-    return {"status": "calling", "sid": call.sid}
+
+    await broadcast({
+        "source": "dispatch",
+        "event": "call_initiated",
+        "sid": call.sid,
+        "work_order_id": work_order_id,
+        "context": context,
+    })
+
+    return {
+        "status": "calling",
+        "sid": call.sid,
+        "to": to_number,
+        "from": from_number,
+        "work_order_id": work_order_id,
+    }
 
 
 # ----------------------------
